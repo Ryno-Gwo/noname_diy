@@ -457,7 +457,7 @@ export default function(){
             "归訫": {
                 audio: "ext:noname_diy_skill:2",
                 trigger: {
-                    player: "damageEnd",
+                    player: "changeHp",
                 },
                 global: "归訫_put",
                 group: ["归訫_use"],
@@ -465,7 +465,7 @@ export default function(){
                   return player.getExpansions("归訫2").length > 0;
                 },
                 filter(event, player) {
-                  // damageEnd：场上至少存在一个可指定的目标
+                  // changeHp：场上至少存在一个可指定的目标
                   return game.hasPlayer(
                     (target) =>
                       target !== player &&
@@ -474,11 +474,17 @@ export default function(){
                         target.countCards("hej") > 0),
                   );
                 },
+                // changeHp 覆盖伤害/体力流失/回复三种来源；
+                // changedHp 为扣除护甲、体力上限封顶后的实际变化值，
+                // 取其绝对值即为“失去或回复的体力点数”，每1点触发一次
+                getIndex(event, player) {
+                  return Math.abs(event.changedHp);
+                },
                 async cost(event, trigger, player) {
                   event.result = await player
                     .chooseTarget(
                       get.prompt(event.skill),
-                      "你可以翻面，然后依次选择其他角色：有“归訫”者你将其所有“归訫”移至你的武将牌上；无“归訫”者你获得其区域内的一张牌。",
+                      "你可以依次选择其他角色：有“归訫”者你将其所有“归訫”移至你的武将牌上；无“归訫”者你获得其区域内的一张牌，然后你翻面。",
                       (card, player2, target) =>
                         target !== player2 &&
                         target.isIn() &&
@@ -501,9 +507,7 @@ export default function(){
                     .forResult();
                 },
                 async content(event, trigger, player) {
-                  // 受到伤害后：先翻面，再依次结算所选角色
-                  await player.turnOver();
-                  game.log(player, "因【归訫】翻面了");
+                  // 受到伤害后：先依次结算所选角色，最后再翻面
                   for (const target of event.targets.slice(0)) {
                     if (!target.isIn()) continue;
                     const guixin = target.getExpansions("归訫2").slice(0);
@@ -545,6 +549,9 @@ export default function(){
                       await next;
                     }
                   }
+                  // 结算完毕后再翻面
+                  await player.turnOver();
+                  game.log(player, "因【归訫】翻面了");
                 },
                 ai: {
                     maixie: true,
@@ -663,10 +670,7 @@ export default function(){
                 sourceSkill: "归訫",
                 enable: ["chooseToUse","chooseToRespond"],
                 filter(event, player) {
-                  if (
-                    !player.getExpansions("归訫2").length ||
-                    player.hasSkill("归訫_use_used")
-                  ) {
+                  if (!player.getExpansions("归訫2").length) {
                     return false;
                   }
                   return (
@@ -736,7 +740,6 @@ export default function(){
                               { name: links[0][2], nature: links[0][3] },
                               [card],
                             );
-                            player2.addTempSkill("归訫_use_used");
                             player2.logSkill("归訫");
                           },
                         };
@@ -752,8 +755,7 @@ export default function(){
                   const type = get.type2(name);
                   return (
                     ["basic", "trick"].includes(type) &&
-                    player.getExpansions("归訫2").length > 0 &&
-                    !player.hasSkill("归訫_use_used")
+                    player.getExpansions("归訫2").length > 0
                   );
                 },
                 ai: {
@@ -761,10 +763,7 @@ export default function(){
                     respondSha: true,
                     respondShan: true,
                     skillTagFilter(player) {
-                        if (
-                          !player.getExpansions("归訫2").length ||
-                          player.hasSkill("归訫_use_used")
-                        ) {
+                        if (!player.getExpansions("归訫2").length) {
                           return false;
                         }
                       },
@@ -781,13 +780,6 @@ export default function(){
                 subSkill: {
                     backup: {
                         "skill_id": "归訫_use_backup",
-                        sub: true,
-                        sourceSkill: "归訫_use",
-                        "_priority": 0,
-                    },
-                    used: {
-                        charlotte: true,
-                        "skill_id": "归訫_use_used",
                         sub: true,
                         sourceSkill: "归訫_use",
                         "_priority": 0,
@@ -1338,7 +1330,7 @@ export default function(){
             "止涕_info": "一局游戏内每名角色限一次，当你对其他角色造成伤害时，若你拥有来源于其的技能，你可以选择一项：①废除其X个装备栏；②降低其X点体力上限（至多降为1）；③令其失去X个技能，直到其进入濒死状态。X为你拥有的来源于其的技能数。",
             "止涕_lock": "止涕",
             "归訫": "归訫",
-            "归訫_info": "①每名角色的回合开始时，其可以将区域内的一张牌置于其武将牌上，称为“归訫”，然后你可以令其摸一张牌。②当你受到伤害后，你可以翻面，然后依次选择任意名其他角色：有“归訫”者你将其所有“归訫”移至你的武将牌上；无“归訫”者你获得其区域内的一张牌。③每名角色的回合限一次，你可以将武将牌上的一张“归訫”当做任意基本牌或非延时类锦囊牌使用或打出。",
+            "归訫_info": "①每名角色的回合开始时，其可以将区域内的一张牌置于其武将牌上，称为“归訫”，然后你可以令其摸一张牌。②每当你失去或回复1点体力后，你可以依次选择任意名其他角色：有“归訫”者你将其所有“归訫”移至你的武将牌上；无“归訫”者你获得其区域内的一张牌，然后你翻面。③你可以将武将牌上的一张“归訫”当做任意基本牌或非延时类锦囊牌使用或打出。",
             "归訫2": "归訫",
             "归訫2_info": "归訫-附属技能",
             "归訫_put": "归訫",
