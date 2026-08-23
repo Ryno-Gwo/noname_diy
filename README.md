@@ -1,4 +1,4 @@
-# noname_diy_skill
+# noname_diy
 
 基于《无名杀》的自制武将扩展，包含若干超模 DIY 武将，仅供娱乐。
 

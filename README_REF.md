@@ -1,6 +1,6 @@
 # 无名杀扩展 · 开发参考文档
 
-> **简介**：本文档记录 `noname_diy_skill` 扩展（作者 Ryno-Gwo，版本 v1.1）内全部角色技能的设计点、实现方式与所用无名杀（Noname）引擎 API，供后续开发与 AI 对话参考。对应代码：`extension.js`。随实现演进持续更新。
+> **简介**：本文档记录 `noname_diy` 扩展（作者 Ryno-Gwo，版本 v1.1）内全部角色技能的设计点、实现方式与所用无名杀（Noname）引擎 API，供后续开发与 AI 对话参考。对应代码：`extension.js`。随实现演进持续更新。
 
 ---
 
@@ -15,7 +15,7 @@ import { lib, game, ui, get, ai, _status } from "noname";
 export const type = "extension";
 export default function () {
   return {
-    name: "noname_diy_skill",          // 扩展名（目录名）
+    name: "noname_diy",          // 扩展名（目录名）
     editable: true, connect: false,
     arenaReady() {}, content() {}, prepare() {}, precontent() {}, help: {}, config: {},
     package: {
@@ -36,7 +36,7 @@ export default function () {
 
 ```js
 "技能名": {
-  audio: "ext:noname_diy_skill:2",        // 音频（:2 数字=默认语音）
+  audio: "ext:noname_diy:2",        // 音频（:2 数字=默认语音）
   trigger: { global: "xxx", player: ["a","b"], source: "c", target: "d" },
   filter(event, player, name) { ... },    // 是否触发；name = 具体触发时机名
   direct: true,                            // 无 cost，content 内自行询问

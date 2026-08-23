@@ -1,7 +1,7 @@
 import { lib, game, ui, get, ai, _status } from "noname";
 export const type = "extension";
 export default function(){
-	return {name:"noname_diy_skill",editable:true,connect:false,arenaReady:function () {},content:function (config, pack) {},prepare:function () {},precontent:function (config) {},help:{},config:{},package:{
+	return {name:"noname_diy",editable:true,connect:false,arenaReady:function () {},content:function (config, pack) {},prepare:function () {},precontent:function (config) {},help:{},config:{},package:{
     character: {
         character: {
             "神张辽": {
@@ -11,8 +11,8 @@ export default function(){
                 maxHp: 5,
                 hujia: 0,
                 skills: ["夺魂","止涕"],
-                img: "extension/noname_diy_skill/神张辽.jpg",
-                dieAudios: ["ext:noname_diy_skill/audio/die/神张辽.mp3"],
+                img: "extension/noname_diy/神张辽.jpg",
+                dieAudios: ["ext:noname_diy/audio/die/神张辽.mp3"],
             },
             "神曹操": {
                 sex: "male",
@@ -21,8 +21,8 @@ export default function(){
                 maxHp: 3,
                 hujia: 0,
                 skills: ["归訫","飛影"],
-                img: "extension/noname_diy_skill/神曹操.jpg",
-                dieAudios: ["ext:noname_diy_skill/audio/die/神曹操.mp3"],
+                img: "extension/noname_diy/神曹操.jpg",
+                dieAudios: ["ext:noname_diy/audio/die/神曹操.mp3"],
             },
             "神诸葛": {
                 sex: "male",
@@ -31,7 +31,7 @@ export default function(){
                 maxHp: 3,
                 hujia: 0,
                 skills: ["七煋","相天","神机"],
-                img: "extension/noname_diy_skill/神诸葛.jpg",
+                img: "extension/noname_diy/神诸葛.jpg",
             },
             "神徐盛": {
                 sex: "male",
@@ -40,13 +40,13 @@ export default function(){
                 maxHp: 5,
                 hujia: 0,
                 skills: ["疑城","破军"],
-                img: "extension/noname_diy_skill/神徐盛.png",
-                dieAudios: ["ext:noname_diy_skill/audio/die/神徐盛.mp3"],
+                img: "extension/noname_diy/神徐盛.png",
+                dieAudios: ["ext:noname_diy/audio/die/神徐盛.mp3"],
             },
         },
         translate: {
             "神张辽": "神张辽",
-            "noname_diy_skill": "noname_diy_skill",
+            "noname_diy": "noname_diy",
             "神曹操": "神曹操",
             "神诸葛": "神诸葛",
             "神徐盛": "神徐盛",
@@ -62,7 +62,7 @@ export default function(){
     skill: {
         skill: {
             "夺魂": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     global: "gameStart",
                     player: "phaseBegin",
@@ -119,7 +119,7 @@ export default function(){
                 },
                 subSkill: {
                     rescue: {
-                        audio: "ext:noname_diy_skill:2",
+                        audio: "ext:noname_diy:2",
                         trigger: {
                             global: "_saveAfter",
                         },
@@ -312,7 +312,7 @@ export default function(){
                 "skill_id": "夺魂",
             },
             "止涕": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     source: "damageSource",
                 },
@@ -530,7 +530,7 @@ export default function(){
                 "_priority": 0,
             },
             "归訫": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     player: "changeHp",
                 },
@@ -864,7 +864,7 @@ export default function(){
                 "_priority": 0,
             },
             "飛影": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 locked: true,
                 mod: {
                     globalTo(from, to, distance) {
@@ -928,7 +928,7 @@ export default function(){
                 "_priority": 1,
             },
             "七煋": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     player: ["phaseBegin", "phaseEnd"],
                     global: "phaseBefore",
@@ -1089,7 +1089,7 @@ export default function(){
                 "_priority": 0,
             },
             "相天": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     global: "phaseBegin",
                 },
@@ -1256,7 +1256,7 @@ export default function(){
                 "_priority": 0,
             },
             "神机": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     global: ["useCard", "respond"],
                 },
@@ -1398,7 +1398,7 @@ export default function(){
                 "_priority": 0,
             },
             "疑城": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     global: "phaseBegin",
                 },
@@ -1739,7 +1739,7 @@ export default function(){
                 "_priority": 0,
             },
             "破军": {
-                audio: "ext:noname_diy_skill:2",
+                audio: "ext:noname_diy:2",
                 trigger: {
                     player: "useCard2",
                 },
