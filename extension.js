@@ -39,7 +39,7 @@ export default function(){
                 hp: 5,
                 maxHp: 5,
                 hujia: 0,
-                skills: ["疑城","破军"],
+                skills: ["疑兵","破军"],
                 img: "extension/noname_diy/神徐盛.png",
                 dieAudios: ["ext:noname_diy/audio/die/神徐盛.mp3"],
             },
@@ -1397,69 +1397,130 @@ export default function(){
                 "skill_id": "神机",
                 "_priority": 0,
             },
-            "疑城": {
+            "疑兵": {
                 audio: "ext:noname_diy:2",
                 trigger: {
                     global: "phaseBegin",
                 },
-                group: ["疑城_negate", "疑城_sha"],
-                direct: true,
-                filter() {
-                    return true;
-                },
-                // ① 其他角色的回合开始时，你可以将至多X张牌置于武将牌上，称为“疑军”（X为你的“疑军”数且至少为1、至多为7）
-                getX(player) {
-                    return Math.min(7, Math.max(1, player.getExpansions("疑城").length));
-                },
+                forced: true,
+                juexingji: true,
+                derivation: ["疑城"],
                 async content(event, trigger, player) {
-                    // 每名角色的回合开始时重置③的限次计数
-                    player.storage.疑城_sha_count = 0;
-                    // ① 仅“其他角色”的回合开始时发动
-                    if (trigger.player == player) {
-                        return;
-                    }
-                    if (!player.countCards("hej")) {
-                        return;
-                    }
-                    const X = lib.skill.疑城.getX(player);
-                    // 先问是否发动（避免 [0,X] 选牌时“确定”无意义的困惑）
-                    const bool = await player
-                        .chooseBool(`疑城：是否将至多${get.cnNumber(X)}张牌置于武将牌上，称为“疑军”？`)
+                    const target = trigger.player;
+                    if (!target.isIn()) return;
+                    // 令当前回合角色选择一项
+                    const choice = await target
+                        .chooseControl("选项一", "选项二")
+                        .set("prompt", "疑兵：请选择一项")
+                        .set("choiceList", [
+                            `令${get.translation(player)}摸两张牌，然后其将其中一张置于武将牌上，称为"疑兵"`,
+                            `将你的一张牌置于${get.translation(player)}的武将牌上，称为"疑兵"`,
+                        ])
                         .set("ai", () => {
                             const me = _status.event.player;
-                            // 有可放置的废牌才发动（与后续选牌 AI 保持一致）
-                            return me.hasCard(
-                                (card) => lib.filter.cardDiscardable(card, me) && get.useful(card, me) < 6,
-                                "hej"
-                            )
-                                ? 1
-                                : 0;
+                            const skillOwner = player;
+                            const att = get.attitude(me, skillOwner);
+                            // 友方：让技能拥有者摸牌增长
+                            if (att > 0) return "选项一";
+                            // 敌方：只有手中有真正废牌（价值极低）时才选选项二给废牌
+                            // get.useful < 4 阈值太高（杀闪约4），改为 get.value < 3
+                            const hasJunk = me.hasCard(
+                                (card) => get.value(card, me) < 3,
+                                "he",
+                            );
+                            if (hasJunk) return "选项二";
+                            return "选项一";
                         })
                         .forResult();
-                    if (!bool.bool) {
-                        return;
+                    player.logSkill("疑兵", target);
+                    if (choice.control === "选项一") {
+                        // 选项一：技能拥有者摸两张牌，选一张置于武将牌上，另一张入手
+                        game.log(target, "选择了选项一");
+                        const cards = get.cards(2);
+                        await player.showCards(cards, `${get.translation(player)}发动了【疑兵】`, true).set("clearArena", false);
+                        const result = await player
+                            .chooseCardButton("疑兵：选择一张牌置于武将牌上", cards, 1, true)
+                            .set("ai", (button) => get.value(button.link, player))
+                            .forResult();
+                        game.broadcastAll(ui.clear);
+                        if (result?.links?.length) {
+                            const chosen = result.links[0];
+                            const remain = cards.filter((c) => c !== chosen);
+                            const next = player.addToExpansion([chosen], "draw");
+                            next.gaintag.add("疑城");
+                            await next;
+                            player.markSkill("疑城");
+                            if (remain.length) {
+                                await player.gain(remain, "gain2");
+                            }
+                        }
+                    } else {
+                        // 选项二：当前回合角色将自己的一张牌置于技能拥有者武将牌上
+                        game.log(target, "选择了选项二");
+                        const result = await target
+                            .chooseCard("he", `将一张牌置于${get.translation(player)}的武将牌上`, true)
+                            .set("ai", (card) => 8 - get.useful(card, _status.event.player))
+                            .forResult();
+                        if (result.bool && result.cards && result.cards.length) {
+                            const next = player.addToExpansion(result.cards, target, "give");
+                            next.gaintag.add("疑城");
+                            await next;
+                            player.markSkill("疑城");
+                        }
                     }
-                    const result = await player
-                        .chooseCard(
-                            "hej",
-                            `疑城：将至多${get.cnNumber(X)}张牌置于武将牌上，称为“疑军”`,
-                            (card) => lib.filter.cardDiscardable(card, player),
-                            [1, X]
+                    // 觉醒检查
+                    if (player.getExpansions("疑城").length >= game.countPlayer()) {
+                        player.awakenSkill("疑兵");
+                        player.addSkill("疑城");
+                        game.log(player, "觉醒了，获得了【疑城】");
+                    }
+                },
+                onremove(player, skill) {
+                    if (!player.hasSkill("疑城") && player.getExpansions("疑城").length) {
+                        player.loseToDiscardpile(player.getExpansions("疑城"));
+                    }
+                },
+                "skill_id": "疑兵",
+                "_priority": 0,
+            },
+            "疑城": {
+                audio: "ext:noname_diy:2",
+                trigger: {
+                    player: "phaseBegin",
+                },
+                group: ["疑城_negate"],
+                direct: true,
+                filter(event, player) {
+                    return player.countCards("hej") > 0;
+                },
+                async content(event, trigger, player) {
+                    const bool = await player
+                        .chooseBool(
+                            get.prompt2(event.skill),
+                            `跳过本回合的摸牌阶段和弃牌阶段，将任意张牌置于武将牌上，称为\u201c疑兵\u201d`
                         )
-                        .set("ai", (card) => {
+                        .set("ai", () => {
                             const me = _status.event.player;
-                            return 6 - get.useful(card, me);
+                            const handCards = me.getCards("h");
+                            if (!handCards.length) return 1;
+                            const avgValue = handCards.reduce((sum, card) => sum + get.useful(card, me), 0) / handCards.length;
+                            return avgValue < 3 ? 1 : 0;
                         })
                         .forResult();
-                    if (!result.bool || !result.cards || !result.cards.length) {
-                        return;
+                    if (!bool.bool) return;
+                    player.logSkill(event.skill);
+                    player.addTempSkill("疑城_skip");
+                    const result = await player
+                        .chooseCard("hej", [1, Infinity], `选择任意张牌置于武将牌上，称为\u201c疑兵\u201d`)
+                        .set("ai", (card) => 6 - get.useful(card, _status.event.player))
+                        .forResult();
+                    if (result.bool && result.cards && result.cards.length) {
+                        const next = player.addToExpansion(result.cards, player, "giveAuto");
+                        next.gaintag.add("疑城");
+                        await next;
+                        player.markSkill("疑城");
+                        game.log(player, "将", get.cnNumber(result.cards.length), "张牌置于武将牌上，作为\u201c疑兵\u201d");
                     }
-                    player.logSkill("疑城");
-                    const next = player.addToExpansion(result.cards, player, "giveAuto");
-                    next.gaintag.add("疑城");
-                    await next;
-                    player.markSkill("疑城");
-                    game.log(player, "将", result.cards, "置于武将牌上，称为“疑军”");
                 },
                 onremove(player, skill) {
                     const cards = player.getExpansions("疑城");
@@ -1468,7 +1529,7 @@ export default function(){
                     }
                 },
                 intro: {
-                    name: "疑军",
+                    name: "疑兵",
                     markcount: "expansion",
                     mark(dialog, storage, player) {
                         const cards = player.getExpansions("疑城");
@@ -1476,12 +1537,33 @@ export default function(){
                             if (player.isUnderControl(true)) {
                                 dialog.addAuto(cards);
                             } else {
-                                return "共有" + get.cnNumber(cards.length) + "张“疑军”";
+                                return "共有" + get.cnNumber(cards.length) + "张\u201c疑兵\u201d";
                             }
                         }
                     },
                 },
                 "skill_id": "疑城",
+                "_priority": 0,
+            },
+            "疑城_skip": {
+                charlotte: true,
+                sub: true,
+                sourceSkill: "疑城",
+                trigger: {
+                    player: ["phaseDrawBegin2", "phaseDiscardBegin"],
+                },
+                forced: true,
+                popup: false,
+                silent: true,
+                content(event, trigger, player) {
+                    if (event.triggername === "phaseDrawBegin2") {
+                        trigger.changeToZero();
+                    } else {
+                        trigger.cancel();
+                    }
+                    game.log(player, "跳过了", event.triggername === "phaseDrawBegin2" ? "摸牌阶段" : "弃牌阶段");
+                },
+                "skill_id": "疑城_skip",
                 "_priority": 0,
             },
             "疑城_negate": {
@@ -1492,338 +1574,174 @@ export default function(){
                     target: "useCardToTarget",
                 },
                 direct: true,
-                // ② 当你成为其他角色使用牌的目标时，若你有“疑军”，你可以移去一张“疑军”并令此牌无效，然后摸X张牌（X为移去前的“疑军”数且至少为1、至多为7）
                 filter(event, player) {
-                    // 仅其他角色使用牌
-                    if (event.player == player) {
-                        return false;
-                    }
+                    if (event.player == player) return false;
                     return player.getExpansions("疑城").length > 0;
                 },
                 async content(event, trigger, player) {
                     const cards = player.getExpansions("疑城");
-                    if (!cards.length) {
-                        return;
-                    }
-                    // X = 移去前的“疑军”数（至少为1、至多为7），例：当前3张→移去1张后摸3张
-                    const X = lib.skill.疑城.getX(player);
+                    if (!cards.length) return;
+                    const X = Math.max(1, Math.min(5, cards.length));
                     const result = await player
-                        .chooseButton(
-                            [
-                                `疑城：是否移去一张“疑军”，令${get.translation(trigger.card)}对你无效，然后摸${get.cnNumber(X)}张牌？`,
-                                [cards, "card"],
-                            ]
-                        )
+                        .chooseButton([
+                            `\u7591\u57ce\uff1a\u662f\u5426\u79fb\u53bb\u4e00\u5f20\u201c\u7591\u5175\u201d\uff0c\u4ee4${get.translation(trigger.card)}\u5bf9\u4f60\u65e0\u6548\uff0c\u7136\u540e\u6478${get.cnNumber(X)}\u5f20\u724c\uff1f`,
+                            [cards, "card"],
+                        ])
                         .set("ai", (button) => {
                             const me = _status.event.player;
                             const trigger2 = _status.event.getTrigger();
-                            if (!trigger2 || get.effect(me, trigger2.card, trigger2.player, me) >= 0) {
-                                return 0;
-                            }
+                            if (!trigger2 || get.effect(me, trigger2.card, trigger2.player, me) >= 0) return 0;
                             return 4 - get.value(button.link, me);
                         })
                         .forResult();
-                    if (!result.bool || !result.links || !result.links.length) {
-                        return;
-                    }
+                    if (!result.bool || !result.links || !result.links.length) return;
+                    player.logSkill("疑城", trigger.player);
                     await player.loseToDiscardpile(result.links[0]);
-                    // 令此牌对你无效
                     trigger.getParent().excluded.add(player);
-                    game.log(player, "移去一张“疑军”，令", trigger.card, "对自己无效");
+                    game.log(player, "移去一张\u201c疑兵\u201d，令", trigger.card, "对自己无效");
                     await player.draw(X);
                 },
                 "skill_id": "疑城_negate",
                 "_priority": 0,
             },
-            "疑城_sha": {
-                audio: "疑城",
-                sub: true,
-                sourceSkill: "疑城",
-                enable: ["chooseToUse", "chooseToRespond"],
-                // ③ 每名角色的回合限3次，将一张“疑军”当做无视距离和次数限制的任意基本牌（杀/闪/桃/酒及火雷杀）使用或打出
-                filter(event, player) {
-                    if (!player.getExpansions("疑城").length) {
-                        return false;
-                    }
-                    if ((player.storage.疑城_sha_count || 0) >= 3) {
-                        return false;
-                    }
-                    return get.inpileVCardList((info) => {
-                        if (info[0] != "basic") {
-                            return false;
-                        }
-                        return event.filterCard(
-                            get.autoViewAs({ name: info[2], nature: info[3], isCard: true, storage: { 疑城_basic: true } }, "unsure"),
-                            player,
-                            event
-                        );
-                    }).length > 0;
-                },
-                chooseButton: {
-                    dialog(event, player) {
-                        const dialog = ui.create.dialog("疑城：将一张“疑军”当做基本牌使用或打出", "hidden");
-                        const types = get.inpileVCardList((info) => {
-                            if (info[0] != "basic") {
-                                return false;
-                            }
-                            return event.filterCard(
-                                get.autoViewAs({ name: info[2], nature: info[3], isCard: true, storage: { 疑城_basic: true } }, "unsure"),
-                                player,
-                                event
-                            );
-                        });
-                        if (types.length > 1) {
-                            dialog._chooseButton = 2;
-                            dialog.add([types, "vcard"]);
-                        } else if (types.length == 1) {
-                            dialog._cardName = types[0];
-                        }
-                        dialog.add(player.getExpansions("疑城"));
-                        return dialog;
-                    },
-                    filter(button, player) {
-                        const evt = _status.event.getParent();
-                        const dialog = _status.event.dialog;
-                        if (!dialog) {
-                            return false;
-                        }
-                        // 单类型：直接选“疑军”
-                        if (!dialog._chooseButton) {
-                            const type = dialog._cardName;
-                            if (!type || !type[2] || Array.isArray(button.link)) {
-                                return false;
-                            }
-                            return evt.filterCard(
-                                get.autoViewAs({ name: type[2], nature: type[3], isCard: true, storage: { 疑城_basic: true } }, [button.link]),
-                                player,
-                                evt
-                            );
-                        }
-                        // 已选类型，接着只能选“疑军”
-                        if (ui.selected.buttons.length) {
-                            const first = ui.selected.buttons[0].link;
-                            if (!Array.isArray(first) || Array.isArray(button.link)) {
-                                return false;
-                            }
-                            const [ , , name, nature] = first;
-                            return evt.filterCard(
-                                get.autoViewAs({ name, nature, isCard: true, storage: { 疑城_basic: true } }, [button.link]),
-                                player,
-                                evt
-                            );
-                        }
-                        // 未选任何按钮：只能选类型按钮
-                        return Array.isArray(button.link);
-                    },
-                    select() {
-                        return _status.event.dialog ? _status.event.dialog._chooseButton || 1 : 1;
-                    },
-                    check(button) {
-                        if (_status.event.getParent().type != "phase") {
-                            return 1;
-                        }
-                        const player = get.player();
-                        if (Array.isArray(button.link)) {
-                            const [ , , name, nature] = button.link;
-                            return player.getUseValue({ name, nature, isCard: true });
-                        }
-                        // 疑军牌：按单类型模式下唯一可用的基本牌评估
-                        const dialog = _status.event.dialog;
-                        const type = dialog && dialog._cardName;
-                        if (type && type[2]) {
-                            return player.getUseValue({ name: type[2], nature: type[3], isCard: true });
-                        }
-                        return 1;
-                    },
-                    backup(links, player) {
-                        let name, nature, card;
-                        if (links.length == 2) {
-                            name = links[0][2];
-                            nature = links[0][3];
-                            card = links[1];
-                        } else {
-                            card = links[0];
-                            // 单类型模式：按事件过滤推断唯一可用的基本牌
-                            const evt = _status.event;
-                            const t = get.inpileVCardList((info) => {
-                                if (info[0] != "basic") {
-                                    return false;
-                                }
-                                return evt.filterCard(
-                                    get.autoViewAs({ name: info[2], nature: info[3], isCard: true }, [card]),
-                                    player,
-                                    evt
-                                );
-                            })[0];
-                            if (t) {
-                                name = t[2];
-                                nature = t[3];
-                            } else {
-                                name = "sha";
-                            }
-                        }
-                        return {
-                            audio: "疑城",
-                            filterCard: (card2) => card2 == lib.skill.疑城_sha_backup.card,
-                            selectCard: -1,
-                            position: "x",
-                            viewAs: { name, nature, storage: { 疑城_basic: true } },
-                            card,
-                            log: false,
-                            async precontent(event, trigger, player2) {
-                                // 不计入次数（不占用本回合使用次数）+ 每回合限次计数
-                                event.getParent().addCount = false;
-                                player2.storage.疑城_sha_count = (player2.storage.疑城_sha_count || 0) + 1;
-                                player2.logSkill("疑城");
-                            },
-                        };
-                    },
-                    prompt(links, player) {
-                        if (links.length == 2) {
-                            return `将一张“疑军”当做${get.translation(links[0][3]) || ""}${get.translation(links[0][2])}使用或打出（无视距离和次数限制）`;
-                        }
-                        return "将一张“疑军”当做基本牌使用或打出（无视距离和次数限制）";
-                    },
-                },
-                mod: {
-                    // ③ 无视距离和次数限制（参考巡使）
-                    targetInRange(card) {
-                        if (card.storage && card.storage.疑城_basic) {
-                            return true;
-                        }
-                    },
-                    cardUsable(card) {
-                        if (card.storage && card.storage.疑城_basic) {
-                            return Infinity;
-                        }
-                    },
-                },
-                hiddenCard(player, name) {
-                    if (!["sha", "shan", "tao", "jiu"].includes(name)) {
-                        return false;
-                    }
-                    if ((player.storage.疑城_sha_count || 0) >= 3) {
-                        return false;
-                    }
-                    return player.getExpansions("疑城").length > 0;
-                },
-                ai: {
-                    respondSha: true,
-                    respondShan: true,
-                    save: true,
-                    skillTagFilter(player, tag) {
-                        if ((player.storage.疑城_sha_count || 0) >= 3) {
-                            return false;
-                        }
-                        return player.getExpansions("疑城").length > 0;
-                    },
-                    order: 6,
-                    result: {
-                        player(player) {
-                            if (_status.event.dying) {
-                                return get.attitude(player, _status.event.dying);
-                            }
-                            return 1;
-                        },
-                    },
-                },
-                subSkill: {
-                    backup: {
-                        "skill_id": "疑城_sha_backup",
-                        sub: true,
-                        sourceSkill: "疑城_sha",
-                        "_priority": 0,
-                    },
-                },
-                "skill_id": "疑城_sha",
-                "_priority": 0,
-            },
             "破军": {
                 audio: "ext:noname_diy:2",
+                mod: {
+                    targetInRange: () => true,
+                    cardUsable: () => Infinity,
+                },
                 trigger: {
                     player: "useCard2",
                 },
                 direct: true,
-                // 你于回合内使用【杀】时，可以移去任意张“疑军”，然后额外指定等量名目标，若如此做，此【杀】无法被响应且伤害+1
-                // useCard2 只对“使用牌”触发（打出杀不会触发），加上回合限制即满足“回合内主动使用【杀】”
+                // ①你使用牌无距离和次数限制（mod 常驻）
+                // ②当你使用牌时，可以移去一张"疑兵"令此牌无法被响应。
+                // ③若为【杀】，可额外移去任意张"疑兵"额外指定等量名目标，若如此做此【杀】伤害+1
                 filter(event, player) {
-                    if (event.card?.name != "sha") {
+                    if (!player.getExpansions("疑城").length) {
                         return false;
                     }
-                    if (_status.currentPhase != player) {
+                    const card = event.card;
+                    if (!card) {
                         return false;
                     }
-                    return player.getExpansions("疑城").length > 0;
+                    const type = get.type2(card);
+                    if (type == "basic" && card.name == "sha") {
+                        return true;
+                    }
+                    if (type == "trick" && card.name != "wuxie") {
+                        return true;
+                    }
+                    return false;
                 },
                 async content(event, trigger, player) {
+                    const card = trigger.card;
+                    let directHitUsed = false;
+                    // ① 移去一张“疑兵”令此牌无法被响应
                     const stars = player.getExpansions("疑城");
-                    if (!stars.length) {
-                        return;
+                    if (stars.length) {
+                        const result1 = await player
+                            .chooseButton(
+                                [
+                                    `破军：是否移去一张“疑兵”，令${get.translation(card)}无法被响应？`,
+                                    [stars, "card"],
+                                ],
+                            )
+                            .set("ai", (button) => {
+                                const me = _status.event.player;
+                                const trigger2 = _status.event.getTrigger();
+                                if (!trigger2) {
+                                    return 0;
+                                }
+                                const targets = trigger2.targets || [];
+                                // 仅当存在敌方目标时才值得令此牌无法被响应
+                                if (!targets.some((t) => t !== me && get.attitude(me, t) < 0)) {
+                                    return 0;
+                                }
+                                // 杀/伤害类锦囊价值更高
+                                if (trigger2.card && (trigger2.card.name == "sha" || get.tag(trigger2.card, "damage") > 0)) {
+                                    return 5 - get.value(button.link, me);
+                                }
+                                return 3 - get.value(button.link, me);
+                            })
+                            .forResult();
+                        if (result1.bool && result1.links && result1.links.length) {
+                            await player.loseToDiscardpile(result1.links[0]);
+                            trigger.directHit.addArray(trigger.targets.slice(0));
+                            directHitUsed = true;
+                            player.logSkill("破军", trigger.targets);
+                            game.log(player, "发动【破军】，令", card, "无法被响应");
+                        }
                     }
-                    const currentTargets = trigger.targets.slice(0);
-                    const availTargets = game.filterPlayer(
-                        (t) => !currentTargets.includes(t) && lib.filter.targetEnabled2(trigger.card, player, t)
-                    );
-                    if (!availTargets.length) {
-                        return;
-                    }
-                    const maxNum = Math.min(stars.length, availTargets.length);
-                    const result = await player
-                        .chooseButton(
-                            [
-                                `破军：移去任意张“疑军”，以额外指定等量名目标（此【杀】将无法被响应且伤害+1）`,
-                                [stars, "card"],
-                            ],
-                            [0, maxNum]
-                        )
-                        .set("ai", (button) => {
-                            const me = _status.event.player;
-                            const trigger2 = _status.event.getTrigger();
-                            if (!trigger2) {
-                                return 0;
-                            }
-                            const targets = trigger2.targets || [];
-                            if (
-                                !game.hasPlayer(
-                                    (t) =>
-                                        !targets.includes(t) &&
-                                        lib.filter.targetEnabled2(trigger2.card, me, t) &&
-                                        get.attitude(me, t) < 0
+                    // ② 若为【杀】：额外移去任意张“疑兵”以额外指定等量名目标（此【杀】伤害+1）
+                    if (card.name == "sha" && player.getExpansions("疑城").length) {
+                        const currentTargets = trigger.targets.slice(0);
+                        const availTargets = game.filterPlayer(
+                            (t) =>
+                                !currentTargets.includes(t) &&
+                                lib.filter.targetEnabled2(card, player, t),
+                        );
+                        if (availTargets.length) {
+                            const stars2 = player.getExpansions("疑城");
+                            const maxNum = Math.min(stars2.length, availTargets.length);
+                            const result2 = await player
+                                .chooseButton(
+                                    [
+                                        `破军：是否额外移去任意张“疑兵”以额外指定等量名目标？（此【杀】伤害+1）`,
+                                        [stars2, "card"],
+                                    ],
+                                    [1, maxNum],
                                 )
-                            ) {
-                                return 0;
+                                .set("ai", (button) => {
+                                    const me = _status.event.player;
+                                    const trigger2 = _status.event.getTrigger();
+                                    if (!trigger2) {
+                                        return 0;
+                                    }
+                                    const targets = trigger2.targets || [];
+                                    if (
+                                        !game.hasPlayer(
+                                            (t) =>
+                                                !targets.includes(t) &&
+                                                lib.filter.targetEnabled2(trigger2.card, me, t) &&
+                                                get.attitude(me, t) < 0,
+                                        )
+                                    ) {
+                                        return 0;
+                                    }
+                                    return 4 - get.value(button.link, me);
+                                })
+                                .forResult();
+                            if (result2.bool && result2.links && result2.links.length) {
+                                const num = result2.links.length;
+                                const result3 = await player
+                                    .chooseTarget(
+                                        `破军：额外指定${get.cnNumber(num)}名目标`,
+                                        (card2, player2, target) =>
+                                            !currentTargets.includes(target) &&
+                                            lib.filter.targetEnabled2(card, player2, target),
+                                        [num, num],
+                                    )
+                                    .set("ai", (target) => {
+                                        const me = _status.event.player;
+                                        return -get.attitude(me, target) + Math.random();
+                                    })
+                                    .forResult();
+                                if (result3.bool && result3.targets && result3.targets.length) {
+                                    await player.loseToDiscardpile(result2.links);
+                                    player.logSkill("破军", result3.targets);
+                                    player.line(result3.targets, "fire");
+                                    trigger.targets.addArray(result3.targets);
+                                    // 若①已令此牌无法被响应，新增目标同样无法被响应
+                                    if (directHitUsed) {
+                                        trigger.directHit.addArray(result3.targets);
+                                    }
+                                    trigger.baseDamage++;
+                                    game.log(player, "发动【破军】，额外指定了", result3.targets, "，此【杀】伤害+1");
+                                }
                             }
-                            return 4 - get.value(button.link, me);
-                        })
-                        .forResult();
-                    if (!result.bool || !result.links || !result.links.length) {
-                        return;
+                        }
                     }
-                    const num = result.links.length;
-                    const result2 = await player
-                        .chooseTarget(
-                            `破军：额外指定${get.cnNumber(num)}名目标`,
-                            (card, player2, target) =>
-                                !currentTargets.includes(target) &&
-                                lib.filter.targetEnabled2(trigger.card, player2, target),
-                            [num, num]
-                        )
-                        .set("ai", (target) => {
-                            const me = _status.event.player;
-                            return -get.attitude(me, target) + Math.random();
-                        })
-                        .forResult();
-                    if (!result2.bool || !result2.targets || !result2.targets.length) {
-                        return;
-                    }
-                    await player.loseToDiscardpile(result.links);
-                    player.logSkill("破军", result2.targets);
-                    player.line(result2.targets, "fire");
-                    trigger.targets.addArray(result2.targets);
-                    // 此【杀】无法被响应（全部目标）且伤害+1
-                    trigger.directHit.addArray(trigger.targets);
-                    trigger.baseDamage++;
-                    game.log(player, "发动【破军】，额外指定了", result2.targets, "，此【杀】无法被响应且伤害+1");
                 },
                 "skill_id": "破军",
                 "_priority": 0,
@@ -1854,18 +1772,20 @@ export default function(){
             "相天2": "相天",
             "神机_used": "神机",
             "七煋_mark": "煋",
+            "疑兵": "疑兵",
+            "疑兵_info": "觉醒技。一名角色的回合开始时，你令其选择一项：1、令你摸两张牌，然后你将其中一张置于你的武将牌上，称为\u201c疑兵\u201d；2、将一张牌置于你的武将牌上，称为\u201c疑兵\u201d。当你以此法得到等于场上角色数的\u201c疑兵\u201d时，你获得【疑城】。",
             "疑城": "疑城",
-            "疑城_info": "①其他角色的回合开始时，你可以将至多X张牌（X为你的“疑军”数且至少为1、至多为7）置于武将牌上，称为“疑军”。②当你成为其他角色使用牌的目标时，若你有“疑军”，你可以移去一张“疑军”并令此牌无效，然后你摸X张牌（X为移去前的“疑军”数且至少为1、至多为7）。③每名角色的回合限3次，你可以将一张“疑军”当做无视距离和次数限制的任意基本牌（包括【杀】、【闪】、【桃】、【酒】及火【杀】、雷【杀】）使用或打出。",
+            "疑城_info": "①回合开始时，你可以跳过本回合的摸牌阶段和弃牌阶段，然后将任意张牌置于你的武将牌上，称为\u201c疑兵\u201d。②当你成为其他角色使用牌的目标时，你可以移去一张\u201c疑兵\u201d并令此牌无效，然后你摸X张牌（X为\u201c疑兵\u201d数且至少为1，至多为5）。",
+            "疑城_skip": "疑城",
             "疑城_negate": "疑城",
-            "疑城_sha": "疑城",
             "破军": "破军",
-            "破军_info": "你于回合内使用【杀】时，你可以移去任意张“疑军”，然后额外指定等量名目标，若如此做，此【杀】无法被响应且伤害+1。",
+            "破军_info": "①你使用牌无距离和次数限制。②当你使用牌时，可以移去一张\u201c疑兵\u201d，然后令此牌无法被响应。若此牌为【杀】，你可以额外移去任意张\u201c疑兵\u201d，然后额外指定等量名目标，若如此做，此【杀】伤害+1。",
         },
     },
     intro: "",
     author: "Ryno-Gwo",
     diskURL: "",
     forumURL: "",
-    version: "1.1",
+    version: "1.0",
 },files:{"character":["神诸葛.jpg","神曹操.jpg","神张辽.jpg","神徐盛.png"],"card":[],"skill":[],"audio":[]}} 
 };
