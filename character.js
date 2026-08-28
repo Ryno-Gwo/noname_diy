@@ -1,0 +1,43 @@
+const characters = {
+	"神张辽": {
+		sex: "male",
+		group: "shen",
+		hp: 1,
+		maxHp: 5,
+		hujia: 0,
+		skills: ["夺魂", "止涕"],
+		img: "extension/noname_diy/神张辽.jpg",
+		dieAudios: ["ext:noname_diy/audio/die/神张辽.mp3"],
+	},
+	"神曹操": {
+		sex: "male",
+		group: "shen",
+		hp: 3,
+		maxHp: 3,
+		hujia: 0,
+		skills: ["归訫", "飛影"],
+		img: "extension/noname_diy/神曹操.jpg",
+		dieAudios: ["ext:noname_diy/audio/die/神曹操.mp3"],
+	},
+	"神诸葛": {
+		sex: "male",
+		group: "shen",
+		hp: 3,
+		maxHp: 3,
+		hujia: 0,
+		skills: ["七煋", "相天", "神机"],
+		img: "extension/noname_diy/神诸葛.jpg",
+	},
+	"神徐盛": {
+		sex: "male",
+		group: "shen",
+		hp: 5,
+		maxHp: 5,
+		hujia: 0,
+		skills: ["疑兵", "破军"],
+		img: "extension/noname_diy/神徐盛.png",
+		dieAudios: ["ext:noname_diy/audio/die/神徐盛.mp3"],
+	},
+};
+
+export default characters;
