@@ -85,7 +85,7 @@ export default function () {
 
 | 角色 | 技能（含附属） | 定位 / 主题 |
 |------|----------------|------------|
-| 神张辽（shen，1/5） | 夺魂（夺魂_rescue）、止涕（止涕_lock） | 体力上限↔技能的资源流转 |
+| 神张辽（shen，1/5） | 魂契、夺魂、止涕（止涕_mark） | 体力上限↔技能的资源流转 + 标记压制 |
 | 神曹操（shen，3/3） | 归訫（归訫2/归訫_put/归訫_use）、飛影 | 卖血 + 标记牌（扩展区）+ 虚拟用牌 |
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
@@ -237,55 +237,80 @@ export default function () {
 
 ## 2.1 神张辽
 
-### 2.1.1 夺魂（含 夺魂_rescue）
+### 2.1.0 魂契
 
 **文案：**
-> ①游戏开始或你的回合开始时，若你的体力上限大于1，你可以失去1点体力，然后增加1点体力上限。
-> ②一名角色死亡时，若你：1、体力上限大于1，你可以减少1点体力上限并获得一名其他角色的一个技能；2、拥有至少1个来源于其他角色的技能，你可以失去一个来源于其他角色的技能，然后摸体力上限张牌。若如此做，你令其回复体力至1点。
-> ③你的手牌上限始终等于体力上限。
+> 锁定技。①当你的体力值增加后，若其大于1，你失去X点体力（X为你增加后的体力值-1），然后增加X点体力上限。②你的手牌上限始终等于体力上限。
 
 **设计点：**
-1. ①"换上限"：用当前体力换永久体力上限（成长型）。
-2. ②"救场 + 资源二选一"：死亡后复活（求桃失败后兜底），代价二选一——**减上限**（收益=拿任意其他角色一个技能）或**丢一个来源技能**（收益=摸上限张牌）。用"若如此做"统一在选项执行后复活。
-3. ③"手牌上限硬锁 = 体力上限"。
-4. 三个效果围绕"体力上限"形成统一资源线，且上限=1 时①/②选项1停用，天然安全锁。
+1. 体力值增长的"自动转化器"：体力一旦超过1，多余部分立即转化为体力上限。
+2. 与夺魂的"减上限换技能"形成闭环：魂契不断积累上限 → 夺魂消耗上限偷技能。
+3. ②手牌上限硬锁 = 体力上限（原夺魂③移至此处）。
 
 **实现要点：**
-- **触发**：主技能 `global:"gameStart"` + `player:"phaseBegin"`；救场用 `global:"_saveAfter"`（求桃失败、正式死亡前），`filter` 判 `event.dying.isDying()`。
+- **触发**：`trigger:{player:"changeHp"}` + `filter` 判 `event.num > 0 && player.hp > 1`。
+- **锁定技**：`locked:true` + `forced:true`，自动发动无需询问。
+- **content**：计算 `X = player.hp - 1` → `loseHp(X)` → `gainMaxHp(X)`。loseHp 会再次触发 changeHp，但此时 `event.num < 0` 不满足 filter，不会循环。
+- **手牌上限硬锁**：`mod:{maxHandcardFinal(player){ return player.maxHp; }}`——用最高优先级层，避免被偷来的 maxHandcardBase 覆盖（同原夺魂③）。
+
+**关键 API：** `changeHp` / `forced` / `locked` / `loseHp` / `gainMaxHp` / `mod.maxHandcardFinal`。
+
+---
+
+### 2.1.1 夺魂
+
+**文案：**
+> ①游戏开始时，你可以失去1点体力上限并获得一名其他角色的一个技能。
+> ②一名角色死亡时，若你：1、体力上限大于1，你可以减少1点体力上限并获得一名其他角色的一个技能；2、拥有至少1个来源于其他角色的技能，你可以失去一个来源于其他角色的技能，然后摸体力上限张牌。若如此做，你令其回复体力至1点。
+
+**设计点：**
+1. **情况A（gameStart）**：开局主动消耗上限换技能，成长型起点。
+2. **情况B（_saveAfter）**：求桃失败后兜底救场，代价二选一——**减上限拿技能**或**丢来源技摸牌**，执行后令濒死角色回复至1点。
+3. 上限=1 时情况A和B选项1均停用，天然安全锁。
+4. 两个触发时机共用一个技能，用 `event.triggername` 区分流程。
+
+**实现要点：**
+- **触发**：`trigger:{global:["gameStart","_saveAfter"]}`，`forced:true` + `locked:false`（跳过引擎自动确认弹窗，由 content 内部的 `chooseBool`/`chooseControl` 控制是否发动）。
+- **filter**：用第三个参数 `name` 区分——`gameStart` 判 `maxHp>1`；`_saveAfter` 判 `event.dying.isIn() && event.dying.isDying()`，不排除自己（可自救）。
+- **⚠️ 不能用 `group`**：若用 `group:["夺魂_rescue"]` 分离救人逻辑，引擎会用子技能的 trigger 覆盖主技能的 trigger，导致 `gameStart` 不触发（见踩坑记录#28）。
+- **⚠️ `logSkill` 不执行效果**：`player.logSkill(skillName)` 仅显示技能名气泡动画，不会执行任何游戏效果。不能用 `logSkill` + `return` 代替实际的技能 content 逻辑（见踩坑记录#29）。
+- **情况A流程**：`chooseBool("是否要失去1点体力上限，并获得一名其他角色的一个技能？")` → `loseMaxHp` → `chooseTarget` → `chooseSkill`。
+- **情况B流程**：`chooseControl(["减体力上限并获得技能", "失去技能并摸牌", "cancel2"])` → 对应效果 → `recoverTo(1)`。
 - **复活**：`await target.recoverTo(1)`（在 `_saveAfter` 内拉回 1 血即可阻止后续 die）。
 - **技能来源追踪**：`player.storage.夺魂_sources = {技能名: 来源角色}`；偷技时在 `chooseSkill` 内写入，失去时 `delete`。
 - **辅助函数**（挂在技能对象上，供夺魂/止涕共用）：
   - `getSkills(target)`：取角色技能（兼容 name/name1/name2 主公技槽）
   - `getStolenSkills(player)`：`Object.keys(map).filter(s => map[s]!==player && player.hasSkill(s))` —— 当前拥有的"来源技能"
-- **代价选择**：`chooseControl` 按可用性动态组 `controls`（选项1需 `maxHp>1` 且存在其他角色有可选技能；选项2需有来源技能），末尾 `push("cancel2")`。
-- **AI 判好感**：救自己/友军才发动；上限>2 优先扣上限，否则丢来源技能（丢技能时 AI 优先丢 `info.charlotte` 的鸡肋技）。
-- **手牌上限硬锁**：`mod.maxHandcardFinal(player){ return player.maxHp; }` —— 用最高优先级层，避免被偷来的 `maxHandcardBase`（七弦/冯河类）覆盖。
-- **防无限复活**：拿技能并入选项①（消耗上限）、丢技能是选项②（消耗技能存量），不再有"复活后白拿技能"的净收益。
+- **AI**：情况A 时 `maxHp>2` 才发动；情况B 时对濒死角色好感度 ≤0 则取消，上限>2 优先扣上限，否则丢来源技能（AI 优先丢 `info.charlotte` 的鸡肋技）。
 
-**关键 API：** `chooseBool` / `chooseControl` / `chooseTarget` / `chooseButton([... , "skill"])` / `loseHp` / `gainMaxHp` / `loseMaxHp` / `recoverTo` / `draw` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `mod.maxHandcardFinal` / `get.prompt2` / `get.attitude` / `game.filterPlayer` / `_status.event.getTrigger()`。
+**关键 API：** `forced` / `locked` / `chooseBool` / `chooseControl` / `chooseTarget` / `chooseButton([... , "skill"])` / `loseMaxHp` / `recoverTo` / `draw` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `event.triggername` / `get.prompt2` / `get.attitude` / `game.filterPlayer` / `_status.event.getTrigger()`。
 
 ---
 
-### 2.1.2 止涕（含 止涕_lock）
+### 2.1.2 止涕（含 止涕_mark）
 
 **文案：**
-> 一局游戏内每名角色限一次，当你对其他角色造成伤害时，若你拥有来源于其的技能，你可以选择一项：①废除其X个装备栏；②降低其X点体力上限（至多降为1）；③令其失去X个技能，直到其进入濒死状态。X为你拥有的来源于其的技能数。
+> 当你对其他角色造成伤害时，若你拥有来源于其的技能，你令其获得一枚其未拥有的标记：【止戈】废除1个由你指定的装备栏；【血俎】降低1点体力上限（至多降为1）；【失魂】失去1个由你指定的技能。若如此做，你增加1点体力上限。
 
 **设计点：**
-1. 与夺魂②的"来源技能"挂钩：**X = 你拥有的、来源于该受伤角色的技能数**（`countFromSource`）。
-2. 三选一压制：废装备栏 / 降上限 / 锁技能。
-3. 一局每名角色限一次（`storage.止涕_used` 数组）。
+1. 与夺魂的"来源技能"挂钩：拥有来源于目标的技能才能发动。
+2. 标记系统：三种标记（止戈/血俎/失魂），每种只能获得一次，标记永久存在。
+3. 标记即效果：获得标记时立即执行对应效果。
+4. 成功添加标记后增加1点体力上限——弥补夺魂消耗上限后的成长缺口，避免上限降为1后无法恢复的隐藏困境。
+5. 强制发动（`forced:true`）：满足条件即自动执行，无需询问。
 
 **实现要点：**
-- **触发**：`source:"damageSource"`，`filter` 判目标≠自己、未用过、`countFromSource>0`。
-- **cost 传参坑**：选项用 `chooseControl`，且**引擎不会把 cost 的 `event.result` 自动传给 content** → 手动 `event.result.cost_data = event.result.control`；且 `chooseControl` 结果**无 bool 字段**，只能靠 `control` 判断。
-- **①废装备栏**：`for` 循环 X 次，`disableEquip(slot)`；3/4 位（武器/防具）合并为 `equip3_4` 一次废除；用 `hasEnabledSlot` 收集可用栏。
-- **②降上限**：`while(num>0 && target.maxHp>1) target.loseMaxHp()`，最多降到 1。
-- **③锁技能**：选 X 个技能 → `target.removeSkill(skill)` → 记录到 `target.storage.止涕_lock` → `target.addSkill("止涕_lock")`。
-- **解锁**：`止涕_lock` 监听 `player:"dying"`（进入濒死即恢复所有被锁技能）并 `removeSkill("止涕_lock")`；`onremove` 兜底（标记被移除时也恢复，防永久丢失）。
-- **AI**：`ai.effect.target` 里对有来源技能且未对其用过止涕的目标，提高伤害牌价值（`current + 0.3`）。
+- **触发**：`source:"damageSource"` + `forced:true`，`filter` 判目标≠自己、未死亡、`countFromSource>0`、且目标尚未拥有全部三种标记。
+- **标记存储**：`target.markAuto("止涕_mark", [选择的标记名])` 统一存储，`target.addSkill("止涕_mark")` 注册展示技能。`getStorage("止涕_mark")` 返回已拥有标记数组。
+- **选项过滤**：`controls` 数组根据 `owned = target.getStorage("止涕_mark") || []` 动态构建，只显示目标未拥有的标记类型。
+- **【止戈】废装备栏**：收集可用栏 `hasEnabledSlot`（3/4 位合并为 `equip3_4`）→ `chooseControl` 选一个 → `disableEquip`。
+- **【血俎】降上限**：`if(target.maxHp > 1) target.loseMaxHp()`，直接降到1。
+- **【失魂】去技能**：`lib.skill.夺魂.getSkills(target)` 获取目标技能 → `filter(s => !lib.skill[s]?.charlotte)` 排除 charlotte 技 → `chooseButton` 选一个 → `target.removeSkill`。
+- **增加上限**：标记效果执行完毕后 `await player.gainMaxHp()`，无论选择了哪种标记。
+- **标记展示**：`止涕_mark` 为 `charlotte` 子技能，`intro:{name:"止涕", content(storage){...}}` 显示已拥有标记。
+- **AI**：`ai.effect.target` 里对有来源技能且标记未满（<3）的目标，提高伤害牌价值（`current + 0.3`）；选择标记时优先失魂（如有技能）、其次血俎（如上限>1）、最后止戈。
 
-**关键 API：** `chooseControl` + `cost_data` / `countCards("e")` / `getEquip` / `hasEnabledSlot` / `disableEquip` / `loseMaxHp` / `removeSkill` / `addSkill` / `addArray` / `trigger.player` / `onremove` / `storage` / `intro.content` / `get.cnNumber`。
+**关键 API：** `forced` / `damageSource` / `countFromSource` / `markAuto` / `getStorage` / `addSkill` / `hasEnabledSlot` / `disableEquip` / `loseMaxHp` / `removeSkill` / `gainMaxHp` / `chooseControl` / `chooseButton` / `intro.content` / `charlotte`。
 
 ---
 
@@ -500,5 +525,12 @@ export default function () {
 19. **jibing 式"类型+扩展牌"组合弹窗**（原疑城_sha ③，已随其移除，保留作通用参考）：vcard 按钮 link 是 `[type,"",name,nature]` 数组，用 `Array.isArray(button.link)` 区分类型按钮与牌按钮；多类型时 `dialog._chooseButton=2`、`select()` 返 `_chooseButton||1`；`backup` 里 `_status.event` 就是 chooseToUse/chooseToRespond 事件（可直接读 filterCard）；单类型模式（`dialog._cardName`）下 `backup` 的 `links[0]` 是扩展牌，需按事件过滤重新推断唯一可用类型。
 20. **`useCard2` 时机**（破军/巡使）：只对"使用牌"触发（打出杀不触发）。可在 content 里 `trigger.directHit.addArray(trigger.targets)` 令无法响应、`trigger.targets.addArray(新目标)` 额外加目标、`trigger.baseDamage++` 加伤害；⚠️ 新增目标是否加入 directHit 需按设计自行决定（破军：仅当"①已移牌令全牌无法响应"时，新增目标才同样不可响应）。
 21. **觉醒技（连续累积型）不能直接用 `awaken:true`**：`awaken:true` 首次触发即移除技能，而"攒够条件才觉醒"的技能需要多次触发。应**手动**：条件满足时 `player.addSkill(觉醒所得技)` 后再 `player.removeSkill(觉醒技)`（先加后删，使 onremove 通过 `hasSkill` 判断保留资源牌）（疑兵）。
-22. **跳过摸牌阶段**：`phaseDrawBegin2` 触发 + `trigger.changeToZero()`（张辽突袭式，`num=0`）实现不摸牌；牌堆顶无主牌用 `get.cards(n)` + `addToExpansion(cards, "draw")`（疑城①）。
-23. **⚠️ 觉醒技动画机制（重要踩坑）**：`skillAnimation: true` 写在技能定义上时，`trySkillAnimate` 会在**每次 `logSkill` 调用时**播放动画，而非仅在觉醒时。对于"攒够条件才觉醒"的连续触发型觉醒技（如疑兵：每回合触发，但攒够牌才觉醒），会导致**每次触发都播动画**。正确做法：**不在技能定义上写 `skillAnimation`**，而是在 `content` 里觉醒条件满足时**手动调用** `player.$skill("技能名", "legend", "wood", "main")`，然后再 `player.awakenSkill()`。⚠️ 第4个参数 `"main"` 必须传，否则 `avatar` 为 falsy 会走 `playerfocus` 分支而非 `playerfocus2` 分支，动画效果不同（`trySkillAnimate` 在 `skill_animation_type == "default"` 时会设 `checkShow = "main"`）。引擎调用链：`logSkill` → `trySkillAnimate` → 检查 `lib.skill[name].skillAnimation` → `player.$skill(name, type, color, checkShow)` → `$legend(1200)` + `$fullscreenpop(name, color, avatar)`。
+22. **技能注册三要素缺一不可**：技能要在游戏中出现，必须同时满足：①`skill.js` 中有技能定义；②`character.js` 的 `skills` 数组中注册；③`translate.js` 中有 `技能名` 和 `技能名_info` 翻译条目。**缺任何一个技能都不会显示**。曾因只改了 `skill.js` 和 `character.js` 但漏了 `translate.js` 导致新技能（魂契）在游戏中完全不出现。
+23. **多触发时机共用一个技能**：当一个技能需要在多个时机触发（如 `gameStart` + `_saveAfter`），不能用 `group` 分离（会覆盖主技能 trigger，见#28）。正确做法：将所有 trigger 写在主技能的数组里，`filter` 用第三个参数 `name` 区分，`content` 用 `event.triggername` 分支。配合 `forced:true` 跳过引擎自动确认弹窗，由 content 内部的 `chooseBool`/`chooseControl` 控制交互。
+24. **`markAuto` + `getStorage` 实现"每种标记最多一个"**：用 `target.markAuto("skill_mark", [value])` 追加标记值到 storage 数组，`target.getStorage("skill_mark")` 返回数组，检查 `owned.includes(value)` 判断是否已拥有。配合 `intro:{content(storage){...}}` 展示已有标记。相比旧式的"每种标记独立 `addMark`"方案，`markAuto` 更适合"多选一且不可重复"的标记系统（止涕_mark）。
+25. **Unicode 转义引号需统一**：JS 文件中的 `\u201c`/`\u201d`（中文左右双引号）在某些引擎环境下可能导致解析问题。建议统一替换为 `\"`（转义英文双引号）。可用 PowerShell 批量替换：`$content.Replace('\u201c','\"').Replace('\u201d','\"')`。
+26. **跳过摸牌阶段**：`phaseDrawBegin2` 触发 + `trigger.changeToZero()`（张辽突袭式，`num=0`）实现不摸牌；牌堆顶无主牌用 `get.cards(n)` + `addToExpansion(cards, "draw")`（疑城①）。
+27. **⚠️ 觉醒技动画机制（重要踩坑）**：`skillAnimation: true` 写在技能定义上时，`trySkillAnimate` 会在**每次 `logSkill` 调用时**播放动画，而非仅在觉醒时。对于"攒够条件才觉醒"的连续触发型觉醒技（如疑兵：每回合触发，但攒够牌才觉醒），会导致**每次触发都播动画**。正确做法：**不在技能定义上写 `skillAnimation`**，而是在 `content` 里觉醒条件满足时**手动调用** `player.$skill("技能名", "legend", "wood", "main")`，然后再 `player.awakenSkill()`。⚠️ 第4个参数 `"main"` 必须传，否则 `avatar` 为 falsy 会走 `playerfocus` 分支而非 `playerfocus2` 分支，动画效果不同（`trySkillAnimate` 在 `skill_animation_type == "default"` 时会设 `checkShow = "main"`）。引擎调用链：`logSkill` → `trySkillAnimate` → 检查 `lib.skill[name].skillAnimation` → `player.$skill(name, type, color, checkShow)` → `$legend(1200)` + `$fullscreenpop(name, color, avatar)`。
+28. **⚠️ `group` 会覆盖主技能的 trigger**：当主技能有 `group:["xxx"]` 时，引擎用 group 中子技能的 trigger **替代**主技能自身的 trigger 进行匹配。若子技能只定义了 `trigger:{global:"_saveAfter"}`，则主技能的 `trigger:{global:"gameStart"}` 不再生效——`gameStart` 时引擎检查的是 `_saveAfter`，不匹配，整个技能静默跳过。**解决方案**：不用 `group`，将所有 trigger 写在主技能上（如 `trigger:{global:["gameStart","_saveAfter"]}`），用 `filter` 的第三个参数 `name` 和 `content` 里的 `event.triggername` 区分不同触发时机的逻辑。
+29. **⚠️ `logSkill` 不执行效果**：`player.logSkill(skillName)` 仅显示技能名气泡动画+播放语音，**不会执行任何游戏效果**。不能用 `if(条件){ player.logSkill(skill); return; }` 来代替实际的 content 逻辑——这会导致技能看起来触发了（有动画），但实际什么都没发生。正确做法：在 content 里直接写效果逻辑，需要动画时在效果执行前调用 `logSkill`。
+30. **⚠️ content 事件中 `event.skill` 为 `undefined`**：引擎 `createTrigger`（content.js）创建 content 事件时用 `game.createEvent(event.skill)` 但未设置 `next.skill`，导致 content 函数内 `event.skill` 为 `undefined`，`get.prompt(event.skill)` 显示"是否发动【】？"。cost 事件有 `next2.skill = event.skill` 所以正常。**不改引擎的解法**：用 `event.name` 代替 `event.skill`——因为 `game.createEvent(event.skill)` 以技能名作为事件名，`event.name` 即为技能名字符串。用法：`get.prompt(event.name)` 代替 `get.prompt(event.skill)`。

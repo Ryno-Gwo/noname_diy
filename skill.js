@@ -2,25 +2,55 @@
 
 /** @type { importCharacterConfig["skill"] } */
 const skills = {
-	"夺魂": {
+	"魂契": {
 		audio: "ext:noname_diy:2",
+		locked: true,
 		forced: true,
 		trigger: {
-			global: "gameStart",
 			player: "changeHp",
 		},
-		group: ["夺魂_rescue"],
-		filter(event, player, name) {
-			if (name === "gameStart") {
-				return player.maxHp > 1;
-			}
-			// 体力值增加且增加后不小于2
-			return event.num > 0 && player.hp >= 2;
+		filter(event, player) {
+			return event.num > 0 && player.hp > 1;
 		},
 		mod: {
 			maxHandcardFinal(player) {
 				return player.maxHp;
 			},
+		},
+		async content(event, trigger, player) {
+			const X = player.hp - 1;
+			if (X > 0) {
+				player.logSkill(event.skill);
+				await player.loseHp(X);
+				await player.gainMaxHp(X);
+			}
+		},
+		skill_id: "魂契",
+		_priority: 0,
+	},
+	"夺魂": {
+		audio: "ext:noname_diy:2",
+		forced: true,
+		locked: false,
+		trigger: {
+			global: ["gameStart", "_saveAfter"],
+		},
+		filter(event, player, name) {
+			if (name === "gameStart") {
+				return player.maxHp > 1;
+			}
+			// _saveAfter: 求桃失败、正式死亡前
+			if (
+				!event.dying ||
+				!event.dying.isIn() ||
+				!event.dying.isDying()
+			) {
+				return false;
+			}
+			return (
+				player.maxHp > 1 ||
+				lib.skill.夺魂.getStolenSkills(player).length > 0
+			);
 		},
 		getSkills(target) {
 			const list = [];
@@ -42,198 +72,198 @@ const skills = {
 			);
 		},
 		async content(event, trigger, player) {
-			player.logSkill(event.skill);
-			await player.loseHp();
-			await player.gainMaxHp();
-		},
-		subSkill: {
-			rescue: {
-				audio: "ext:noname_diy:2",
-				trigger: {
-					global: "_saveAfter",
-				},
-				filter(event, player) {
-					if (
-						!event.dying ||
-						!event.dying.isIn() ||
-						!event.dying.isDying()
-					) {
-						return false;
-					}
-					return (
-						player.maxHp > 1 ||
-						lib.skill.夺魂.getStolenSkills(player).length > 0
-					);
-				},
-				direct: true,
-				async content(event, trigger, player) {
-					const target = trigger.dying;
-					const chooseSkill = async (source) => {
-						const skills = lib.skill.夺魂
-							.getSkills(source)
-							.filter((i) => !player.hasSkill(i));
-						if (!skills.length) {
-							return;
+			const target = event.triggername === "_saveAfter" ? trigger.dying : null;
+			const chooseSkill = async (source) => {
+				const skills = lib.skill.夺魂
+					.getSkills(source)
+					.filter((i) => !player.hasSkill(i));
+				if (!skills.length) {
+					return;
+				}
+				const chosen = await player
+					.chooseButton(
+						["请选择要获得的技能", [skills, "skill"]],
+						true,
+					)
+					.set("ai", (button) => {
+						const info = get.info(button.link);
+						if (info && info.charlotte) {
+							return 1;
 						}
-						const chosen = await player
-							.chooseButton(
-								["请选择要获得的技能", [skills, "skill"]],
-								true,
-							)
-							.set("ai", (button) => {
-								const info = get.info(button.link);
-								if (info && info.charlotte) {
-									return 1;
-								}
-								if (info && info.ai && info.ai.combo) {
-									return 3 + Math.random();
-								}
-								return 2 + Math.random();
-							})
-							.forResult();
-						if (chosen.bool && chosen.links && chosen.links.length) {
-							await player.addSkills(chosen.links);
-							if (!player.storage.夺魂_sources) {
-								player.storage.夺魂_sources = {};
-							}
-							for (const skill of chosen.links) {
-								player.storage.夺魂_sources[skill] = source;
-							}
+						if (info && info.ai && info.ai.combo) {
+							return 3 + Math.random();
 						}
-					};
-					const controls = [];
-					const skillCandidates = game.filterPlayer(
-						(t) =>
-							t !== player &&
-							lib.skill.夺魂
-								.getSkills(t)
-								.some((i) => !player.hasSkill(i)),
-					);
-					if (player.maxHp > 1 && skillCandidates.length) {
-						controls.push("减少体力上限并获得技能");
+						return 2 + Math.random();
+					})
+					.forResult();
+				if (chosen.bool && chosen.links && chosen.links.length) {
+					await player.addSkills(chosen.links);
+					if (!player.storage.夺魂_sources) {
+						player.storage.夺魂_sources = {};
 					}
-					const stolenSkills = lib.skill.夺魂.getStolenSkills(player);
-					if (stolenSkills.length) {
-						controls.push("失去一个来源技能并摸牌");
+					for (const skill of chosen.links) {
+						player.storage.夺魂_sources[skill] = source;
 					}
-					if (!controls.length) {
-						return;
-					}
-					controls.push("cancel2");
-					const costResult = await player
-						.chooseControl(controls)
-						.set("prompt", get.prompt2(event.skill, target))
-						.set(
-							"prompt2",
-							"选择一项：①减少1点体力上限，并获得一名其他角色的一个技能；②失去一个来源于其他角色的技能，然后摸体力上限张牌。若如此做，你令其回复体力至1点。",
-						)
-						.set("ai", () => {
-							const player2 = _status.event.player;
-							const trigger2 = _status.event.getTrigger();
-							const target2 = trigger2 && trigger2.dying;
-							if (!target2) {
-								return "cancel2";
-							}
-							if (
-								target2 !== player2 &&
-								get.attitude(player2, target2) <= 0
-							) {
-								return "cancel2";
-							}
-							const evtControls = _status.event.controls || [];
-							if (
-								evtControls.includes("减少体力上限并获得技能") &&
-								player2.maxHp > 2
-							) {
-								return "减少体力上限并获得技能";
-							}
-							if (evtControls.includes("失去一个来源技能并摸牌")) {
-								return "失去一个来源技能并摸牌";
-							}
-							if (evtControls.includes("减少体力上限并获得技能")) {
-								return "减少体力上限并获得技能";
-							}
+				}
+			};
+			const stolenSkills = lib.skill.夺魂.getStolenSkills(player);
+			const skillCandidates = game.filterPlayer(
+				(t) =>
+					t !== player &&
+					lib.skill.夺魂
+						.getSkills(t)
+						.some((i) => !player.hasSkill(i)),
+			);
+			if (event.triggername === "gameStart") {
+				// 情况A：chooseBool 确认后直接减上限拿技能
+				if (player.maxHp <= 1 || !skillCandidates.length) {
+					return;
+				}
+				const result = await player
+					.chooseBool(
+						get.prompt(event.name),
+						"是否要失去1点体力上限，并获得一名其他角色的一个技能？",
+					)
+					.set("ai", () => (player.maxHp > 2 ? 1 : 0))
+					.forResult();
+				if (!result.bool) {
+					return;
+				}
+				player.logSkill(event.skill);
+				await player.loseMaxHp();
+				const tResult = await player
+					.chooseTarget(
+						true,
+						"选择一名其他角色，永久获得其一个技能",
+						(card, player2, t) => {
+							return (
+								player2 !== t &&
+								lib.skill.夺魂
+									.getSkills(t)
+									.some((i) => !player2.hasSkill(i))
+							);
+						},
+					)
+					.set("ai", (t) => {
+						const player2 = _status.event.player;
+						const filtered = lib.skill.夺魂
+							.getSkills(t)
+							.filter((i) => !player2.hasSkill(i));
+						if (!filtered.length) {
+							return 0;
+						}
+						return 1 + Math.random();
+					})
+					.forResult();
+				if (tResult.bool && tResult.targets.length) {
+					await chooseSkill(tResult.targets[0]);
+				}
+			} else {
+				// 情况B：chooseControl 选 B1/B2，执行后复活
+				const controls = [];
+				if (player.maxHp > 1 && skillCandidates.length) {
+					controls.push("减体力上限并获得技能");
+				}
+				if (stolenSkills.length) {
+					controls.push("失去技能并摸牌");
+				}
+				if (!controls.length) {
+					return;
+				}
+				controls.push("cancel2");
+				const costResult = await player
+					.chooseControl(controls)
+					.set("prompt", get.prompt("夺魂", target))
+					.set(
+						"prompt2",
+						`濒死角色：${get.translation(target)}。选择一项：①减体力上限并获得技能，令其回复体力至1点；②失去技能并摸牌，令其回复体力至1点。`,
+					)
+					.set("ai", () => {
+						const player2 = _status.event.player;
+						const trigger2 = _status.event.getTrigger();
+						const target2 = trigger2 && trigger2.dying;
+						if (target2 && target2 !== player2 && get.attitude(player2, target2) <= 0) {
 							return "cancel2";
+						}
+						const evtControls = _status.event.controls || [];
+						if (
+							evtControls.includes("减体力上限并获得技能") &&
+							player2.maxHp > 2
+						) {
+							return "减体力上限并获得技能";
+						}
+						if (evtControls.includes("失去技能并摸牌")) {
+							return "失去技能并摸牌";
+						}
+						if (evtControls.includes("减体力上限并获得技能")) {
+							return "减体力上限并获得技能";
+						}
+						return "cancel2";
+					})
+					.forResult();
+				if (costResult.control === "cancel2" || !costResult.control) {
+					return;
+				}
+				player.logSkill(event.skill, target);
+				if (costResult.control === "减体力上限并获得技能") {
+					await player.loseMaxHp();
+					const tResult = await player
+						.chooseTarget(
+							true,
+							"选择一名其他角色，永久获得其一个技能",
+							(card, player2, t) => {
+								return (
+									player2 !== t &&
+									lib.skill.夺魂
+										.getSkills(t)
+										.some((i) => !player2.hasSkill(i))
+								);
+							},
+						)
+						.set("ai", (t) => {
+							const player2 = _status.event.player;
+							const filtered = lib.skill.夺魂
+								.getSkills(t)
+								.filter((i) => !player2.hasSkill(i));
+							if (!filtered.length) {
+								return 0;
+							}
+							return 1 + Math.random();
 						})
 						.forResult();
-					if (
-						costResult.control === "cancel2" ||
-						!costResult.control
-					) {
+					if (tResult.bool && tResult.targets.length) {
+						await chooseSkill(tResult.targets[0]);
+					}
+				} else {
+					const chosen = await player
+						.chooseButton([
+							"请选择要失去的来源于其他角色的技能",
+							[stolenSkills, "skill"],
+						])
+						.set("ai", (button) => {
+							const info = get.info(button.link);
+							if (info && info.charlotte) {
+								return 1;
+							}
+							return 2 + Math.random();
+						})
+						.forResult();
+					if (!chosen.bool || !chosen.links || !chosen.links.length) {
 						return;
 					}
-					player.logSkill(event.skill, target);
-					if (costResult.control === "减少体力上限并获得技能") {
-						await player.loseMaxHp();
-						const result = await player
-							.chooseTarget(
-								true,
-								"选择一名其他角色，永久获得其一个技能",
-								(card, player2, t) => {
-									return (
-										player2 !== t &&
-										lib.skill.夺魂
-											.getSkills(t)
-											.some((i) => !player2.hasSkill(i))
-									);
-								},
-							)
-							.set("ai", (t) => {
-								const player2 = _status.event.player;
-								const filtered = lib.skill.夺魂
-									.getSkills(t)
-									.filter((i) => !player2.hasSkill(i));
-								if (!filtered.length) {
-									return 0;
-								}
-								return 1 + Math.random();
-							})
-							.forResult();
-						if (result.bool && result.targets.length) {
-							await chooseSkill(result.targets[0]);
+					for (const skill of chosen.links) {
+						await player.removeSkill(skill);
+						if (player.storage.夺魂_sources) {
+							delete player.storage.夺魂_sources[skill];
 						}
-					} else {
-						if (!stolenSkills.length) {
-							return;
-						}
-						const chosen = await player
-							.chooseButton([
-								"请选择要失去的来源于其他角色的技能",
-								[stolenSkills, "skill"],
-							])
-							.set("ai", (button) => {
-								const info = get.info(button.link);
-								if (info && info.charlotte) {
-									return 1;
-								}
-								return 2 + Math.random();
-							})
-							.forResult();
-						if (
-							!chosen.bool ||
-							!chosen.links ||
-							!chosen.links.length
-						) {
-							return;
-						}
-						for (const skill of chosen.links) {
-							await player.removeSkill(skill);
-							if (player.storage.夺魂_sources) {
-								delete player.storage.夺魂_sources[skill];
-							}
-						}
-						await player.draw(player.maxHp);
 					}
-					await target.recoverTo(1);
-				},
-				skill_id: "夺魂_rescue",
-				sub: true,
-				sourceSkill: "夺魂",
-				_priority: 0,
-			},
+					await player.draw(player.maxHp);
+				}
+				await target.recoverTo(1);
+			}
 		},
-		_priority: 0,
 		skill_id: "夺魂",
+		_priority: 0,
 	},
 	"止涕": {
 		audio: "ext:noname_diy:2",
@@ -245,11 +275,15 @@ const skills = {
 			if (!target || target === player || target.isDead()) {
 				return false;
 			}
-			const used = player.storage.止涕_used || [];
-			if (used.includes(target)) {
+			if (lib.skill.止涕.countFromSource(player, target) <= 0) {
 				return false;
 			}
-			return lib.skill.止涕.countFromSource(player, target) > 0;
+			const owned = target.getStorage("止涕_mark") || [];
+			return (
+				!owned.includes("止戈") ||
+				!owned.includes("血俎") ||
+				!owned.includes("失魂")
+			);
 		},
 		countFromSource(player, target) {
 			const map = player.storage.夺魂_sources || {};
@@ -257,110 +291,106 @@ const skills = {
 				(skill) => map[skill] === target && player.hasSkill(skill),
 			).length;
 		},
-		async cost(event, trigger, player) {
-			const target = trigger.player;
-			const X = lib.skill.止涕.countFromSource(player, target);
-			const controls = ["止涕1", "止涕2"];
-			if (lib.skill.夺魂.getSkills(target).length > 0) {
-				controls.push("止涕3");
-			}
-			controls.push("cancel2");
-			event.result = await player
-				.chooseControl(controls)
-				.set(
-					"prompt",
-					`对${get.translation(target)}发动【止涕】：废除其${get.cnNumber(X)}个装备栏，或降低其${get.cnNumber(X)}点体力上限，或令其失去${get.cnNumber(X)}个技能`,
-				)
-				.set("ai", () => {
-					const player2 = _status.event.player;
-					const trigger2 = _status.event.getTrigger();
-					const target2 = trigger2 && trigger2.player;
-					if (!target2 || get.attitude(player2, target2) >= 0) {
-						return "cancel2";
-					}
-					const X2 = lib.skill.止涕.countFromSource(player2, target2);
-					const skills = lib.skill.夺魂.getSkills(target2);
-					if (skills.length > 0 && skills.length >= X2) {
-						return "止涕3";
-					}
-					if (target2.countCards("e") > 0) {
-						return "止涕1";
-					}
-					return "止涕2";
-				})
-				.forResult();
-			if (event.result && event.result.control) {
-				event.result.cost_data = event.result.control;
-			}
-		},
+		forced: true,
 		async content(event, trigger, player) {
 			const target = trigger.player;
-			const X = lib.skill.止涕.countFromSource(player, target);
-			if (!player.storage.止涕_used) {
-				player.storage.止涕_used = [];
+			const owned = target.getStorage("止涕_mark") || [];
+			const controls = [];
+			if (!owned.includes("止戈")) {
+				controls.push("止戈");
 			}
-			player.storage.止涕_used.push(target);
-			player.logSkill("止涕", target);
-			if (event.cost_data === "止涕1") {
-				for (let n = 0; n < X; n++) {
-					const slotSet = new Set();
-					for (const slot of [1, 2, 3, 4, 5]) {
-						if (target.hasEnabledSlot(slot)) {
-							slotSet.add(
-								slot === 3 || slot === 4 ? "equip3_4" : `equip${slot}`,
-							);
-						}
+			if (!owned.includes("血俎")) {
+				controls.push("血俎");
+			}
+			if (!owned.includes("失魂")) {
+				controls.push("失魂");
+			}
+			controls.push("cancel2");
+			const result = await player
+				.chooseControl(controls)
+				.set("prompt", get.prompt(event.name, target))
+				.set(
+					"prompt2",
+					"令其获得一枚其未拥有的标记：【止戈】废除1个装备栏；【血俎】降低1点体力上限；【失魂】失去1个技能。若如此做，你增加1点体力上限。",
+				)
+				.set("ai", () => {
+					const me = _status.event.player;
+					const tgt = _status.event.getTrigger().player;
+					if (get.attitude(me, tgt) >= 0) {
+						return "cancel2";
 					}
-					const list = Array.from(slotSet);
-					if (!list.length) {
-						break;
+					if (
+						controls.includes("失魂") &&
+						lib.skill.夺魂.getSkills(tgt).filter((s) => !lib.skill[s]?.charlotte).length > 0
+					) {
+						return "失魂";
 					}
-					const result = await player
-						.chooseControl(list)
-						.set("prompt", `选择废除${get.translation(target)}的一个装备栏`)
+					if (controls.includes("血俎") && tgt.maxHp > 1) {
+						return "血俎";
+					}
+					if (controls.includes("止戈")) {
+						return "止戈";
+					}
+					return "cancel2";
+				})
+				.forResult();
+			if (result.control === "cancel2") {
+				return;
+			}
+			player.logSkill(event.skill, target);
+			target.markAuto("止涕_mark", [result.control]);
+			target.addSkill("止涕_mark");
+			if (result.control === "止戈") {
+				const slotList = [];
+				for (const slot of [1, 2, 3, 4, 5]) {
+					if (target.hasEnabledSlot(slot)) {
+						slotList.push(
+							slot === 3 || slot === 4
+								? "equip3_4"
+								: `equip${slot}`,
+						);
+					}
+				}
+				if (slotList.length) {
+					const slotResult = await player
+						.chooseControl(slotList)
+						.set(
+							"prompt",
+							`选择废除${get.translation(target)}的一个装备栏`,
+						)
 						.set("ai", () => {
-							if (
-								list.includes("equip3_4") &&
-								target.getEquip(3) &&
-								target.getEquip(4)
-							) {
+							if (slotList.includes("equip3_4")) {
 								return "equip3_4";
 							}
-							if (list.includes("equip2") && target.getEquip(2)) {
+							if (slotList.includes("equip2")) {
 								return "equip2";
 							}
-							if (list.includes("equip5") && target.getEquip(5)) {
-								return "equip5";
-							}
-							if (list.includes("equip1") && target.getEquip(1)) {
-								return "equip1";
-							}
-							return list[0];
+							return slotList[0];
 						})
 						.forResult();
-					if (result.control === "equip3_4") {
+					if (slotResult.control === "equip3_4") {
 						await target.disableEquip(3, 4);
 					} else {
-						await target.disableEquip(result.control);
+						await target.disableEquip(slotResult.control);
 					}
 				}
-			} else if (event.cost_data === "止涕2") {
-				let num = X;
-				while (num > 0 && target.maxHp > 1) {
+			} else if (result.control === "血俎") {
+				if (target.maxHp > 1) {
 					await target.loseMaxHp();
-					num--;
 				}
-			} else if (event.cost_data === "止涕3") {
-				const available = lib.skill.夺魂.getSkills(target);
-				const num = Math.min(X, available.length);
-				if (num > 0) {
-					const result = await player
+			} else if (result.control === "失魂") {
+				const skills = lib.skill.夺魂.getSkills(target);
+				const available = skills.filter(
+					(s) => !lib.skill[s]?.charlotte,
+				);
+				if (available.length) {
+					const skillResult = await player
 						.chooseButton(
 							[
-								`止涕：选择要令${get.translation(target)}失去的${get.cnNumber(num)}个技能`,
+								`选择令${get.translation(target)}失去的一个技能`,
 								[available, "skill"],
 							],
-							[num, num],
+							true,
 						)
 						.set("ai", (button) => {
 							const info = get.info(button.link);
@@ -370,19 +400,16 @@ const skills = {
 							return 2 + Math.random();
 						})
 						.forResult();
-					if (result.bool && result.links && result.links.length) {
-						if (!target.storage.止涕_lock) {
-							target.storage.止涕_lock = [];
-						}
-						target.storage.止涕_lock.addArray(result.links);
-						for (const skill of result.links) {
-							target.removeSkill(skill);
-						}
-						target.addSkill("止涕_lock");
-						game.log(target, "失去了", result.links, "，进入濒死状态时恢复");
+					if (
+						skillResult.bool &&
+						skillResult.links &&
+						skillResult.links.length
+					) {
+						target.removeSkill(skillResult.links[0]);
 					}
 				}
 			}
+			await player.gainMaxHp();
 		},
 		ai: {
 			effect: {
@@ -390,10 +417,12 @@ const skills = {
 					if (
 						target !== player &&
 						get.tag(card, "damage") > 0 &&
-						lib.skill.止涕.countFromSource(player, target) > 0 &&
-						!(player.storage.止涕_used || []).includes(target)
+						lib.skill.止涕.countFromSource(player, target) > 0
 					) {
-						return current + 0.3;
+						const owned = target.getStorage("止涕_mark") || [];
+						if (owned.length < 3) {
+							return current + 0.3;
+						}
 					}
 				},
 			},
@@ -401,43 +430,20 @@ const skills = {
 		skill_id: "止涕",
 		_priority: 0,
 	},
-	"止涕_lock": {
+	"止涕_mark": {
 		charlotte: true,
 		sub: true,
 		sourceSkill: "止涕",
-		trigger: {
-			player: "dying",
-		},
-		async content(event, trigger, player) {
-			const list = player.storage.止涕_lock || [];
-			player.storage.止涕_lock = [];
-			for (const skill of list) {
-				if (lib.skill[skill] && !player.hasSkill(skill)) {
-					player.addSkill(skill);
-				}
-			}
-			player.removeSkill("止涕_lock");
-			if (list.length) {
-				game.log(player, "因进入濒死状态，恢复了", list, "等技能");
-			}
-		},
-		onremove(player, skill) {
-			const list = player.storage.止涕_lock || [];
-			player.storage.止涕_lock = [];
-			for (const s of list) {
-				if (lib.skill[s] && !player.hasSkill(s)) {
-					player.addSkill(s);
-				}
-			}
-		},
 		intro: {
 			name: "止涕",
-			content(storage, player) {
-				const list = player.storage.止涕_lock || [];
-				return `已失去${get.cnNumber(list.length)}个技能，进入濒死状态时恢复`;
+			content(storage) {
+				if (!storage || !storage.length) {
+					return "";
+				}
+				return "已拥有标记：" + storage.map((s) => `【${s}】`).join("");
 			},
 		},
-		skill_id: "止涕_lock",
+		skill_id: "止涕_mark",
 		_priority: 0,
 	},
 	"归訫": {
@@ -466,7 +472,7 @@ const skills = {
 			event.result = await player
 				.chooseTarget(
 					get.prompt(event.skill),
-					"你可以依次选择其他角色：有\u201c归訫\u201d者你将其所有\u201c归訫\u201d移至你的武将牌上；无\u201c归訫\u201d者你获得其区域内的一张牌，然后你翻面。",
+					"你可以依次选择其他角色：有\"归訫\"者你将其所有\"归訫\"移至你的武将牌上；无\"归訫\"者你获得其区域内的一张牌，然后你翻面。",
 					(card, player2, target) =>
 						target !== player2 &&
 						target.isIn() &&
@@ -504,7 +510,7 @@ const skills = {
 						player,
 						"将",
 						target,
-						"的所有\u201c归訫\u201d移至了自己的武将牌上",
+						"的所有\"归訫\"移至了自己的武将牌上",
 					);
 					if (target.getExpansions("归訫2").length === 0) {
 						target.removeSkill("归訫2");
@@ -555,7 +561,7 @@ const skills = {
 					if (player.isUnderControl(true)) {
 						dialog.addAuto(cards);
 					} else {
-						return "共有" + get.cnNumber(cards.length) + "张\u201c归訫\u201d牌";
+						return "共有" + get.cnNumber(cards.length) + "张\"归訫\"牌";
 					}
 				}
 			},
@@ -621,7 +627,7 @@ const skills = {
 			const next = player.addToExpansion(cards, player, "giveAuto");
 			next.gaintag.add("归訫2");
 			await next;
-			game.log(player, "将", cards, "置于武将牌上，作为\u201c归訫\u201d");
+			game.log(player, "将", cards, "置于武将牌上，作为\"归訫\"");
 			const drawResult = await holder
 				.chooseBool(`是否令${get.translation(player)}摸一张牌？`)
 				.set("ai", () =>
@@ -715,7 +721,7 @@ const skills = {
 				};
 			},
 			prompt(links, player) {
-				return `随机使用一张\u201c归訫\u201d，将其当做${get.translation(links[0][3]) || ""}${get.translation(links[0][2])}使用`;
+				return `随机使用一张\"归訫\"，将其当做${get.translation(links[0][3]) || ""}${get.translation(links[0][2])}使用`;
 			},
 		},
 		hiddenCard(player, name) {
@@ -860,7 +866,7 @@ const skills = {
 				const next = player.chooseToMove();
 				next.set(
 					"prompt",
-					`七煋：调整牌堆顶七张牌的顺序（点击两张牌可交换位置），前${get.cnNumber(num)}张将置于武将牌上，称为\u201c煋\u201d`,
+					`七煋：调整牌堆顶七张牌的顺序（点击两张牌可交换位置），前${get.cnNumber(num)}张将置于武将牌上，称为\"煋\"`,
 				);
 				next.set("list", [["牌堆顶", cards]]);
 				next.set("processAI", (list) => {
@@ -944,7 +950,7 @@ const skills = {
 					player,
 					"将",
 					get.cnNumber(num),
-					"张\u201c煋\u201d分别移至了",
+					"张\"煋\"分别移至了",
 					result2.targets,
 					"的武将牌上",
 				);
@@ -958,7 +964,7 @@ const skills = {
 					if (player.isUnderControl(true)) {
 						dialog.addAuto(cards);
 					} else {
-						return "共有" + get.cnNumber(cards.length) + "张\u201c煋\u201d";
+						return "共有" + get.cnNumber(cards.length) + "张\"煋\"";
 					}
 				}
 			},
@@ -988,7 +994,7 @@ const skills = {
 			const stars = target.getExpansions("七煋");
 			const { bool, links } = await player
 				.chooseButton([
-					`相天：是否移去${get.translation(target)}武将牌上的一张\u201c煋\u201d？`,
+					`相天：是否移去${get.translation(target)}武将牌上的一张\"煋\"？`,
 					[stars, "card"],
 				])
 				.set("ai", () => 1 + Math.random())
@@ -1280,8 +1286,8 @@ const skills = {
 				.chooseControl("选项一", "选项二")
 				.set("prompt", "疑兵：请选择一项")
 				.set("choiceList", [
-					`令${get.translation(player)}摸两张牌，然后其将其中一张置于武将牌上，称为\u201c疑兵\u201d`,
-					`将你的一张牌置于${get.translation(player)}的武将牌上，称为\u201c疑兵\u201d`,
+					`令${get.translation(player)}摸两张牌，然后其将其中一张置于武将牌上，称为\"疑兵\"`,
+					`将你的一张牌置于${get.translation(player)}的武将牌上，称为\"疑兵\"`,
 				])
 				.set("ai", () => {
 					const me = _status.event.player;
@@ -1360,7 +1366,7 @@ const skills = {
 			const phaseName = isPhaseDraw ? "摸牌阶段" : "弃牌阶段";
 			player.logSkill(event.skill);
 			const result = await player
-				.chooseCard("hej", [1, Infinity], `跳过${phaseName}，选择任意张牌置于武将牌上，称为\u201c疑兵\u201d（取消则不跳过）`)
+				.chooseCard("hej", [1, Infinity], `跳过${phaseName}，选择任意张牌置于武将牌上，称为\"疑兵\"（取消则不跳过）`)
 				.set("ai", (card) => 6 - get.useful(card, _status.event.player))
 				.forResult();
 			if (!result.bool || !result.cards || !result.cards.length) return;
@@ -1370,7 +1376,7 @@ const skills = {
 			next.gaintag.add("疑城");
 			await next;
 			player.markSkill("疑城");
-			game.log(player, "将", get.cnNumber(result.cards.length), "张牌置于武将牌上，作为\u201c疑兵\u201d");
+			game.log(player, "将", get.cnNumber(result.cards.length), "张牌置于武将牌上，作为\"疑兵\"");
 		},
 		onremove(player, skill) {
 			const cards = player.getExpansions("疑城");
@@ -1387,7 +1393,7 @@ const skills = {
 					if (player.isUnderControl(true)) {
 						dialog.addAuto(cards);
 					} else {
-						return "共有" + get.cnNumber(cards.length) + "张\u201c疑兵\u201d";
+						return "共有" + get.cnNumber(cards.length) + "张\"疑兵\"";
 					}
 				}
 			},
@@ -1413,21 +1419,30 @@ const skills = {
 			const X = Math.max(1, Math.min(5, cards.length));
 			const result = await player
 				.chooseButton([
-					`疑城：是否移去一张\u201c疑兵\u201d，令${get.translation(trigger.card)}对你无效，然后摸${get.cnNumber(X)}张牌？`,
+					`疑城：是否移去一张\"疑兵\"，令${get.translation(trigger.card)}对你无效，然后摸${get.cnNumber(X)}张牌？`,
 					[cards, "card"],
 				])
 				.set("ai", (button) => {
 					const me = _status.event.player;
 					const trigger2 = _status.event.getTrigger();
-					if (!trigger2 || get.effect(me, trigger2.card, trigger2.player, me) >= 0) return 0;
-					return 4 - get.value(button.link, me);
+					if (!trigger2) {
+						return 0;
+					}
+					const targets = trigger2.targets || [];
+					if (!targets.some((t) => t !== me && get.attitude(me, t) < 0)) {
+						return 0;
+					}
+					if (trigger2.card && (trigger2.card.name == "sha" || get.tag(trigger2.card, "damage") > 0)) {
+						return 5 - get.value(button.link, me);
+					}
+					return 3 - get.value(button.link, me);
 				})
 				.forResult();
 			if (!result.bool || !result.links || !result.links.length) return;
 			player.logSkill("疑城", trigger.player);
 			await player.loseToDiscardpile(result.links[0]);
 			trigger.getParent().excluded.add(player);
-			game.log(player, "移去一张\u201c疑兵\u201d，令", trigger.card, "对自己无效");
+			game.log(player, "移去一张\"疑兵\"，令", trigger.card, "对自己无效");
 			await player.draw(X);
 		},
 		skill_id: "疑城_negate",
@@ -1468,7 +1483,7 @@ const skills = {
 				const result1 = await player
 					.chooseButton(
 						[
-							`破军：是否移去一张\u201c疑兵\u201d，令${get.translation(card)}无法被响应？`,
+							`破军：是否移去一张\"疑兵\"，令${get.translation(card)}无法被响应？`,
 							[stars, "card"],
 						],
 					)
@@ -1509,7 +1524,7 @@ const skills = {
 					const result2 = await player
 						.chooseButton(
 							[
-								`破军：是否额外移去任意张\u201c疑兵\u201d以额外指定等量名目标？`,
+								`破军：是否额外移去任意张\"疑兵\"以额外指定等量名目标？`,
 								[stars2, "card"],
 							],
 							[1, maxNum],
@@ -1590,7 +1605,7 @@ const skills = {
 			if (cards.length) {
 				await player.gain(cards, "draw");
 			}
-			game.log(player, "收回了" + get.cnNumber(cards.length) + "张\u201c破军\u201d牌");
+			game.log(player, "收回了" + get.cnNumber(cards.length) + "张\"破军\"牌");
 			player.removeSkill("破军2");
 		},
 		intro: {

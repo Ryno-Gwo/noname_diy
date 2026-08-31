@@ -5,7 +5,7 @@ const characters = {
 		hp: 1,
 		maxHp: 5,
 		hujia: 0,
-		skills: ["夺魂", "止涕"],
+		skills: ["魂契", "夺魂", "止涕"],
 		img: "extension/noname_diy/神张辽.jpg",
 		dieAudios: ["ext:noname_diy/audio/die/神张辽.mp3"],
 	},
