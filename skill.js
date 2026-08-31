@@ -4,14 +4,18 @@
 const skills = {
 	"夺魂": {
 		audio: "ext:noname_diy:2",
+		forced: true,
 		trigger: {
 			global: "gameStart",
-			player: "phaseBegin",
+			player: "changeHp",
 		},
 		group: ["夺魂_rescue"],
-		direct: true,
-		filter(event, player) {
-			return player.maxHp > 1;
+		filter(event, player, name) {
+			if (name === "gameStart") {
+				return player.maxHp > 1;
+			}
+			// 体力值增加且增加后不小于2
+			return event.num > 0 && player.hp >= 2;
 		},
 		mod: {
 			maxHandcardFinal(player) {
@@ -38,22 +42,6 @@ const skills = {
 			);
 		},
 		async content(event, trigger, player) {
-			const { bool } = await player
-				.chooseBool(
-					get.prompt2(event.skill),
-					"失去1点体力，然后增加1点体力上限",
-				)
-				.set("ai", () => {
-					const player2 = _status.event.player;
-					if (player2.hp <= 1 && player2.maxHp <= 1) {
-						return 0;
-					}
-					return 1;
-				})
-				.forResult();
-			if (!bool) {
-				return;
-			}
 			player.logSkill(event.skill);
 			await player.loseHp();
 			await player.gainMaxHp();
