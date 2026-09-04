@@ -36,7 +36,7 @@ export default function () {
 			version: "1.0",
 		},
 		files: {
-			character: ["神诸葛.jpg", "神曹操.jpg", "神张辽.jpg", "神徐盛.png"],
+			character: ["神诸葛.jpg", "神曹操.jpg", "神张辽.jpg", "神徐盛.png", "神司马.jpg"],
 			card: [],
 			skill: [],
 			audio: [],
