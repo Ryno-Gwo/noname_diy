@@ -31,7 +31,7 @@ const skills = {
 	"夺魂": {
 		audio: "ext:noname_diy:2",
 		forced: true,
-		locked: false,
+		locked: true,
 		trigger: {
 			global: ["gameStart", "_saveAfter"],
 		},
@@ -1624,47 +1624,135 @@ const skills = {
 	},
 	"戢鳞": {
 		audio: "ext:noname_diy:2",
-		trigger: { global: "phaseBegin" },
-		filter(event, player) {
-			return event.player !== player && player.getExpansions("覆变").length < 5;
+		locked: true,
+		forced: true,
+		trigger: {
+			player: ["chooseToUseAfter", "chooseToRespondAfter"],
+			global: "_wuxieAfter",
 		},
-		prompt: "是否发动【戢鳞】？",
+		filter(event, player) {
+			if (event.name == "_wuxie") {
+				const trick = event._trigger?.card;
+				if (!trick) return false;
+				if (get.type(trick) !== "trick" || get.type2(trick) === "delay") return false;
+				const directHit = event._trigger?.getParent()?.directHit;
+				if (directHit?.length && directHit.includes(player)) return false;
+				if (event.wuxieresult && event.wuxieresult == player) return false;
+				if (event._info_map.player == player) return false;
+				return true;
+			}
+			if (event.name == "chooseToUse" && event.type == "wuxie") return false;
+			if (!event.respondTo || event.respondTo[0] === player) return false;
+			const trick = event.respondTo[1];
+			if (get.type(trick) !== "trick" || get.type2(trick) === "delay") return false;
+			return !event.result.bool;
+		},
 		async content(event, trigger, player) {
-			const target = trigger.player;
-			const num = 5 - player.getExpansions("覆变").length;
-			// 观看牌堆顶5张牌
-			const cards = get.cards(5);
-			await game.cardsGotoOrdering(cards);
-			await player.showCards(cards, `${get.translation(player)}发动了【戢鳞】`, true).set("clearArena", false);
-			// 选择至多X张牌置为"志"
+			await player.draw(1);
+			if (player.getExpansions("倾朝").length >= 5) return;
+			const h = player.getCards("h");
+			if (h.length === 0) return;
 			const result = await player
-				.chooseCardButton(`戢鳞：选择至多${get.cnNumber(num)}张牌置为"志"，剩余交给${get.translation(target)}`, cards, [0, num], true)
-				.set("ai", button => get.value(button.link, player))
+				.chooseCard("戢鳞：将一张手牌置于武将牌上，称为\u201c志\u201d", 1, true)
+				.set("ai", card => get.value(card, player))
 				.forResult();
-			game.broadcastAll(ui.clear);
-			const chosen = result?.links || [];
-			const remain = cards.filter(c => !chosen.includes(c));
-			// 将选中的牌置为"志"
-			if (chosen.length) {
-				const next = player.addToExpansion(chosen, "draw");
-				next.gaintag.add("覆变");
+			if (result.bool && result.cards.length) {
+				const next = player.addToExpansion(result.cards, player, "giveAuto");
+				next.gaintag.add("倾朝");
 				await next;
-				player.markSkill("覆变");
-			}
-			// 剩余牌交给目标
-			if (remain.length) {
-				await target.gain(remain, "gain2");
-			}
-			// 给目标添加无效技能（X=交给其的牌数）
-			if (remain.length > 0) {
-				target.addSkill("戢鳞_seal");
-				target.addMark("戢鳞_seal", remain.length, false);
-				target.storage["戢鳞_seal_source"] = player;
+				player.markSkill("倾朝");
 			}
 		},
 		onremove(player, skill) {
-			if (!player.hasSkill("覆变") && player.getExpansions("覆变").length) {
-				player.loseToDiscardpile(player.getExpansions("覆变"));
+			if (!player.hasSkill("倾朝") && player.getExpansions("倾朝").length) {
+				player.loseToDiscardpile(player.getExpansions("倾朝"));
+			}
+		},
+		skill_id: "戢鳞",
+		_priority: 0,
+	},
+	"英猷": {
+		audio: "ext:noname_diy:2",
+		trigger: { global: "phaseBegin" },
+		filter(event, player) {
+			if (event.player === player) return false;
+			const zhi = player.getExpansions("倾朝");
+			if (zhi.length < 2) return false;
+			const suitMap = {};
+			for (const c of zhi) {
+				const s = get.suit(c);
+				suitMap[s] = (suitMap[s] || 0) + 1;
+			}
+			return Object.values(suitMap).some(count => count >= 2);
+		},
+		prompt: "是否发动【英猷】？",
+		async content(event, trigger, player) {
+			const target = trigger.player;
+			const zhi = player.getExpansions("倾朝");
+			const suitGroups = {};
+			for (const c of zhi) {
+				const s = get.suit(c);
+				if (!suitGroups[s]) suitGroups[s] = [];
+				suitGroups[s].push(c);
+			}
+			const validSuits = Object.keys(suitGroups).filter(s => suitGroups[s].length >= 2);
+			if (validSuits.length === 0) return;
+			let chosenCards;
+			if (validSuits.length === 1) {
+				const suit = validSuits[0];
+				const cards = suitGroups[suit];
+				const result = await player
+					.chooseButton([`英猷：移去至少2张${get.translation(suit)}的"志"`, [cards, "card"]], [2, cards.length])
+					.set("ai", button => get.value(button.link, player))
+					.forResult();
+				if (!result.bool) return;
+				chosenCards = result.links;
+			} else {
+				const suitChoice = await player
+					.chooseControl(validSuits)
+					.set("prompt", "英猷：选择要移去的\"志\"的花色")
+					.set("ai", () => validSuits[0])
+					.forResult();
+				const chosenSuit = suitChoice.control;
+				const cards = suitGroups[chosenSuit];
+				const result = await player
+					.chooseButton([`英猷：移去至少2张${get.translation(chosenSuit)}的"志"`, [cards, "card"]], [2, cards.length])
+					.set("ai", button => get.value(button.link, player))
+					.forResult();
+				if (!result.bool) return;
+				chosenCards = result.links;
+			}
+			const X = chosenCards.length;
+			await player.loseToDiscardpile(chosenCards);
+			player.markSkill("倾朝");
+			await player.draw(X);
+			const choice = await player
+				.chooseControl(["选项一", "选项二", "选项三", "cancel2"])
+				.set("prompt", "英猷：请选择一项")
+				.set("choiceList", [
+					`弃置${get.translation(target)}${get.cnNumber(X)}张牌`,
+					`令${get.translation(target)}使用的下${get.cnNumber(X)}张牌无效`,
+					`令${get.translation(target)}摸${get.cnNumber(X)}张牌并跳过出牌阶段和弃牌阶段`
+				])
+				.set("ai", () => {
+					const att = get.attitude(player, target);
+					if (att >= 0) return "cancel2";
+					return "选项三";
+				})
+				.forResult();
+			if (choice.control === "cancel2") return;
+			player.logSkill("英猷", target);
+			if (choice.control === "选项一") {
+				if (target.countCards("he") > 0) {
+					await player.discardPlayerCard(target, "he", X, true);
+				}
+			} else if (choice.control === "选项二") {
+				target.addSkill("英猷_seal");
+				target.addMark("英猷_seal", X, false);
+				target.storage["英猷_seal_source"] = player;
+			} else {
+				await target.draw(X);
+				target.addTempSkill("英猷_skip", { player: "phaseAfter" });
 			}
 		},
 		subSkill: {
@@ -1675,167 +1763,67 @@ const skills = {
 				intro: { content: "使用的下#张牌无效" },
 				trigger: { player: "useCard1" },
 				filter(event, player) {
-					return player.countMark("戢鳞_seal") > 0;
+					return player.countMark("英猷_seal") > 0;
 				},
 				async content(event, trigger, player) {
-					player.removeMark("戢鳞_seal", 1, false);
+					player.removeMark("英猷_seal", 1, false);
 					trigger.all_excluded = true;
-					game.log(trigger.card, "因【戢鳞】无效");
-					if (!player.countMark("戢鳞_seal")) {
-						player.removeSkill("戢鳞_seal");
+					game.log(trigger.card, "因【英猷】无效");
+					if (!player.countMark("英猷_seal")) {
+						player.removeSkill("英猷_seal");
 					}
 				},
 				onremove(player) {
-					delete player.storage["戢鳞_seal_source"];
+					delete player.storage["英猷_seal_source"];
+				}
+			},
+			skip: {
+				charlotte: true,
+				forced: true,
+				trigger: { player: ["phaseUseBegin", "phaseDiscardBegin"] },
+				async content(event, trigger, player) {
+					trigger.cancel();
+					game.log(player, "跳过了", event.triggername === "phaseUseBegin" ? "出牌阶段" : "弃牌阶段");
 				}
 			}
 		},
-		skill_id: "戢鳞",
+		skill_id: "英猷",
 		_priority: 0,
 	},
-	"英猷": {
-        audio: "ext:noname_diy:2",
-        trigger: { global: "useCard" },
-        filter(event, player) {
-            if (_status.currentPhase !== event.player) return false;
-            if (get.type(event.card) !== "trick" || get.type2(event.card) === "delay") return false;
-            if (!event.card.isCard || !event.cards || event.cards.length !== 1) return false;
-            return player.getExpansions("覆变").some(c => get.suit(c) === get.suit(event.card));
-        },
-        prompt: "是否发动【英猷】？",
-        async content(event, trigger, player) {
-            const zhi = player.getExpansions("覆变").filter(c => get.suit(c) === get.suit(trigger.card));
-            const { bool, links } = await player.chooseButton(['移去一张"志"', zhi], true).forResult();
-            if (!bool) return;
-            await player.loseToDiscardpile(links);
-            const X = Math.max(1, player.getExpansions("覆变").length + 1);
-            // 由玩家选择（不是使用者）
-            const choice = await player.chooseControl(["选项一", "选项二", "cancel2"])
-                .set("prompt", "英猷：请选择一项")
-                .set("choiceList", [
-                    `其视为再次使用此牌，然后摸${X}张牌并结束出牌阶段，若其弃牌阶段弃置了手牌，你获得之`,
-                    `令此牌无效，你摸${X}张牌并交给其一张，然后直到回合结束，其不能使用${get.translation(get.suit(trigger.card))}的牌`
-                ])
-                .set("ai", () => {
-                    const att = get.attitude(player, trigger.player);
-                    if (att > 0) return "选项一";
-                    return "选项二";
-                })
-                .forResult();
-            const control = choice.control;
-            if (control === "cancel2") return;
-            player.logSkill("英猷", trigger.player);
-            if (control === "选项一") {
-                // 先获取phaseUse引用（useCard后事件链可能改变）
-                const phaseUse = trigger.getParent("phaseUse");
-                trigger.player.addTempSkill("英猷_used", "phaseAfter");
-                await trigger.player.useCard(trigger.card, trigger.targets, false);
-                await trigger.player.draw(X);
-                // 结束出牌阶段
-                if (phaseUse && !phaseUse.skipped) {
-                    phaseUse.skipped = true;
-                    game.log(trigger.player, "的出牌阶段被结束");
-                }
-                // 若其弃牌阶段弃置了手牌，你获得之
-                trigger.player.addTempSkill("英猷_gain", { player: "phaseAfter" });
-                trigger.player.storage["英猷_gain_target"] = player;
-            } else {
-                trigger.targets.length = 0;
-                await player.draw(X);
-                if (player.countCards('h') > 0) {
-                    const { cards } = await player.chooseCard('h', true, `交给${get.translation(trigger.player)}一张牌`).forResult();
-                    await player.give(cards, trigger.player);
-                }
-                // 锁花色
-                trigger.player.addTempSkill("英猷_forbid", { player: "phaseAfter" });
-                trigger.player.markAuto("英猷_forbid", [get.suit(trigger.card)]);
-            }
-        },
-        subSkill: {
-            used: { charlotte: true },
-            gain: {
-                charlotte: true,
-                forced: true,
-                silent: true,
-                popup: false,
-                trigger: { global: "phaseDiscardAfter" },
-                filter(event, player) {
-                    const target = player.storage["英猷_gain_target"];
-                    if (!target || !target.isIn()) return false;
-                    return event.player.getHistory("lose", evt =>
-                        evt.type === "discard" && evt.getParent("phaseDiscard") === event && evt.hs.someInD("d")
-                    ).length > 0;
-                },
-                async content(event, trigger, player) {
-                    const target = player.storage["英猷_gain_target"];
-                    const cards = [];
-                    game.getGlobalHistory("cardMove", evt => {
-                        if (evt.name === "cardsDiscard" && evt.getParent("phaseDiscard") === trigger) {
-                            cards.addArray(evt.cards.filterInD("d"));
-                        }
-                        if (evt.name === "lose" && evt.type === "discard" && evt.position === ui.discardPile && evt.getParent("phaseDiscard") === trigger) {
-                            cards.addArray(evt.cards.filterInD("d"));
-                        }
-                    });
-                    if (cards.length && target.isIn()) {
-                        await target.gain(cards, "gain2");
-                        game.log(target, "获得了", get.cnNumber(cards.length), "张因弃牌阶段弃置的牌");
-                    }
-                },
-                onremove(player) {
-                    delete player.storage["英猷_gain_target"];
-                }
-            },
-            forbid: {
-                charlotte: true,
-                onremove: true,
-                marktext: "封",
-                intro: { content: "本回合不能使用$的牌" },
-                mod: {
-                    cardEnabled(card, player) {
-                        if (player.getStorage("英猷_forbid").includes(get.suit(card))) return false;
-                    },
-                    cardRespondable(card, player) {
-                        if (player.getStorage("英猷_forbid").includes(get.suit(card))) return false;
-                    },
-                    cardSavable(card, player) {
-                        if (player.getStorage("英猷_forbid").includes(get.suit(card))) return false;
-                    }
-                }
-            }
-        },
-        skill_id: "英猷",
-        _priority: 0,
-    },
 	"应天": {
 		audio: "ext:noname_diy:2",
 		trigger: { player: "phaseZhunbeiBegin" },
 		forced: true,
-		derivation: ["覆变", "reguicai", "rewansha", "lianpo"],
+		derivation: ["倾朝", "reguicai", "rewansha", "lianpo"],
 		filter(event, player) {
-			return player.getExpansions("覆变").length >= 5;
+			return player.getExpansions("倾朝").length >= 5;
 		},
 		async content(event, trigger, player) {
-			// 手动觉醒动画（踩坑#27）
 			player.$skill("应天", "legend", "thunder", "main");
 			player.awakenSkill("应天");
-			// 先加后删（踩坑#21）
-			await player.addSkills(["覆变", "reguicai", "rewansha", "lianpo"]);
+			await player.loseMaxHp();
+			// 先加后删：确保戢鳞的onremove检测到倾朝存在，不会移除"志"
+			await player.addSkills(["倾朝", "reguicai", "rewansha", "lianpo"]);
 			await player.removeSkills(["戢鳞", "英猷"]);
-			game.log(player, "觉醒了，获得了【覆变】、【鬼才】、【完杀】、【连破】");
+			game.log(player, "觉醒了，减少了1点体力上限，失去了【戢鳞】、【英猷】，获得了【倾朝】、【鬼才】、【完杀】、【连破】");
 		},
 		skill_id: "应天",
 		_priority: 0,
 	},
-	"覆变": {
+	"倾朝": {
 		audio: "ext:noname_diy:2",
 		locked: true,
 		forced: true,
 		mod: {
 			// ②使用与“志”花色相同的牌无距离限制
 			targetInRange(card, player) {
-				const zhi = player.getExpansions("覆变");
+				const zhi = player.getExpansions("倾朝");
 				if (zhi.some(c => get.suit(c) === get.suit(card))) return true;
+			},
+			// ③使用与所有“志”花色均不相同的牌无次数限制
+			cardUsable(card, player) {
+				const zhi = player.getExpansions("倾朝");
+				if (zhi.length && !zhi.some(c => get.suit(c) === get.suit(card))) return true;
 			}
 		},
 		trigger: {
@@ -1844,29 +1832,28 @@ const skills = {
 		},
 		filter(event, player, name) {
 			if (name === "phaseAfter") {
-				// ③回合结束时，需有“志”
-				return player.getExpansions("覆变").length > 0;
+				return player.getExpansions("倾朝").length > 0;
 			}
-			// ①失去牌时，检查花色
 			const evt = event.getl(player);
 			if (!evt || !evt.cards2 || !evt.cards2.length) return false;
-			return evt.cards2.some(card => {
-				return player.getExpansions("覆变").some(c => get.suit(c) === get.suit(card));
-			});
+			const zhi = player.getExpansions("倾朝");
+			if (!zhi.length) return false;
+			const zhiSuits = new Set(zhi.map(c => get.suit(c)));
+			return evt.cards2.some(card => zhiSuits.has(get.suit(card)));
 		},
 		async content(event, trigger, player) {
 			if (event.triggername === "phaseAfter") {
-				// ③回合结束时：移去一张“志”，摸X张牌
-				const zhi = player.getExpansions("覆变");
+				const zhi = player.getExpansions("倾朝");
 				const { bool, links } = await player.chooseButton(['移去一张“志”', zhi], true).forResult();
 				if (bool) {
-					const X = Math.max(1, zhi.length); // 移去前的数量，至少为1
 					await player.loseToDiscardpile(links);
-					await player.draw(X);
 				}
 			} else {
-				// ①失去牌时：摸一张牌
-				await player.draw();
+				const evt = trigger.getl(player);
+				const zhi = player.getExpansions("倾朝");
+				const zhiSuits = new Set(zhi.map(c => get.suit(c)));
+				const X = evt.cards2.filter(card => zhiSuits.has(get.suit(card))).length;
+				if (X > 0) await player.draw(X);
 			}
 		},
 		intro: {
@@ -1874,7 +1861,7 @@ const skills = {
 			marktext: "志",
 			markcount: "expansion",
 			mark(dialog, storage, player) {
-				const cards = player.getExpansions("覆变");
+				const cards = player.getExpansions("倾朝");
 				if (cards.length) {
 					if (player.isUnderControl(true)) {
 						dialog.addAuto(cards);
@@ -1885,12 +1872,12 @@ const skills = {
 			}
 		},
 		onremove(player, skill) {
-			const cards = player.getExpansions("覆变");
+			const cards = player.getExpansions("倾朝");
 			if (cards.length) {
 				player.loseToDiscardpile(cards);
 			}
 		},
-		skill_id: "覆变",
+		skill_id: "倾朝",
 		_priority: 0,
 	},
 };

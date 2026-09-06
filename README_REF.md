@@ -89,7 +89,7 @@ export default function () {
 | 神曹操（shen，3/3） | 归訫（归訫2/归訫_put/归訫_use）、飛影 | 卖血 + 标记牌（扩展区）+ 虚拟用牌 |
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
-| 应天司马懿（shen，4/4） | 戢鳞（戢鳞_seal）、英猷（英猷_used/英猷_gain/英猷_forbid）、应天（觉醒技）、覆变 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
+| 应天司马懿（shen，4/4） | 戢鳞、英猷（英猷_seal/英猷_skip）、应天（觉醒技）、倾朝 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
 
 ---
 
@@ -546,4 +546,4 @@ export default function () {
 39. **⚠️ translate.js 中的引号编码**：`translate.js` 的字符串值内引用技能名/资源名时，必须使用中文弯引号 `\u201c`/`\u201d`（即 `"`/`"`），**不能**用 ASCII 双引号 `"`（U+0022）——那会被 JavaScript 解析器当作字符串结束符，导致 `SyntaxError: Unexpected identifier`。编辑 translate.js 时尤其注意：不要在替换操作中把弯引号替换为直引号。可用 `\u201c`/`\u201d` Unicode 转义写法代替直接粘贴弯引号字符（应天司马懿·英猷_info）。
 40. **结束出牌阶段的正确做法**：参考巧说（reqiaoshui）`event.getParent(3).skipped = true`。对于 `trigger: { global: "useCard" }` 的技能，`trigger` 本身就是 useCard 事件，`trigger.getParent("phaseUse")` 可获取出牌阶段事件。⚠️ **必须在 `await useCard` 之前**保存 phaseUse 引用——`await` 之后事件链可能改变导致引用失效。正确模式：`const phaseUse = trigger.getParent("phaseUse");` → `await player.useCard(...);` → `phaseUse.skipped = true;`（应天司马懿·英猷）。
 41. **内置技能的内部名 ≠ 中文显示名**：游戏内置技能（如鬼才、完杀、连破等）在 `addSkills`/`removeSkills` 等 API 中必须使用**内部标识符**（如 `reguicai`、`rewansha`、`lianpo`），不能用中文翻译名。可在原版武将包（如 `extra.js`）中搜索 `derivation` 字段找到正确的内部名（应天司马懿·应天）。
-42. **⚠️ `targetInRange` mod 返回值语义**：`targetInRange(card, player, target)` mod 中，返回 `true` = 目标在范围内（无距离限制）；返回 `false` = **强制判定为目标超出距离**（不可使用）；返回 `undefined`（不返回）= 不修改，按正常距离计算。⚠️ 常见错误：`return zhi.some(c => get.suit(c) === get.suit(card))`——当花色不匹配时 `.some()` 返回 `false`，导致该花色的牌**永远无法使用**（被强制判定为超出距离）。正确写法：`if (zhi.some(...)) return true;`，不匹配时隐式返回 `undefined`，让引擎正常计算距离（应天司马懿·覆变）。
+42. **⚠️ `targetInRange` mod 返回值语义**：`targetInRange(card, player, target)` mod 中，返回 `true` = 目标在范围内（无距离限制）；返回 `false` = **强制判定为目标超出距离**（不可使用）；返回 `undefined`（不返回）= 不修改，按正常距离计算。⚠️ 常见错误：`return zhi.some(c => get.suit(c) === get.suit(card))`——当花色不匹配时 `.some()` 返回 `false`，导致该花色的牌**永远无法使用**（被强制判定为超出距离）。正确写法：`if (zhi.some(...)) return true;`，不匹配时隐式返回 `undefined`，让引擎正常计算距离（应天司马懿·倾朝）。

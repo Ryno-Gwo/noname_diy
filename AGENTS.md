@@ -33,3 +33,8 @@
 
 - **技能描述**（写入 `translate.js`、`README.md`、`README_REF.md` 的"文案"部分）：正式文案语言，与游戏内显示一致。
 - **辅助解释**（仅供开发者/AI 理解）：实现原理、API 说明、设计意图分析等，这部分内容不能出现在技能描述中。
+
+### 常见陷阱
+
+- `replace_string_in_file` 需精确匹配字符。本项目文件使用 Unicode 弯引号 `""`（U+201C/U+201D），与直引号 `""`（U+0022）视觉相同但字节不同，会导致替换失败。失败时用 `read_file` 或让用户贴内容确认，不要盲试。
+- filter 中 `event` 是原始触发事件（有 `getl`），content 中 `event` 是技能事件（无 `getl`），原始触发事件在 content 的 `trigger` 参数中。
