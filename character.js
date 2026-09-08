@@ -48,6 +48,15 @@ const characters = {
 		img: "extension/noname_diy/神司马.jpg",
 		dieAudios: ["ext:noname_diy/audio/die/神司马.mp3"],
 	},
+	"神冶": {
+		sex: "male",
+		group: "shen",
+		hp: 4,
+		maxHp: 4,
+		hujia: 0,
+		skills: ["冶武", "炼刃", "穷兵"],
+		img: "extension/noname_diy/神冶.jpg",
+	},
 };
 
 export default characters;

@@ -1653,7 +1653,7 @@ const skills = {
 			const h = player.getCards("h");
 			if (h.length === 0) return;
 			const result = await player
-				.chooseCard("戢鳞：将一张手牌置于武将牌上，称为\u201c志\u201d", 1, true)
+				.chooseCard("戢鳞：将一张手牌置于武将牌上，称为\"志\"", 1, true)
 				.set("ai", card => get.value(card, player))
 				.forResult();
 			if (result.bool && result.cards.length) {
@@ -1702,7 +1702,7 @@ const skills = {
 				const suit = validSuits[0];
 				const cards = suitGroups[suit];
 				const result = await player
-					.chooseButton([`英猷：移去至少2张${get.translation(suit)}的"志"`, [cards, "card"]], [2, cards.length])
+					.chooseButton([`英猷：移去至少2张${get.translation(suit)}的\"志\"`, [cards, "card"]], [2, cards.length])
 					.set("ai", button => get.value(button.link, player))
 					.forResult();
 				if (!result.bool) return;
@@ -1716,7 +1716,7 @@ const skills = {
 				const chosenSuit = suitChoice.control;
 				const cards = suitGroups[chosenSuit];
 				const result = await player
-					.chooseButton([`英猷：移去至少2张${get.translation(chosenSuit)}的"志"`, [cards, "card"]], [2, cards.length])
+					.chooseButton([`英猷：移去至少2张${get.translation(chosenSuit)}的\"志\"`, [cards, "card"]], [2, cards.length])
 					.set("ai", button => get.value(button.link, player))
 					.forResult();
 				if (!result.bool) return;
@@ -1802,7 +1802,7 @@ const skills = {
 			player.$skill("应天", "legend", "thunder", "main");
 			player.awakenSkill("应天");
 			await player.loseMaxHp();
-			// 先加后删：确保戢鳞的onremove检测到倾朝存在，不会移除"志"
+			// 先加后删：确保戢鳞的onremove检测到倾朝存在，不会移除\"志\"
 			await player.addSkills(["倾朝", "reguicai", "rewansha", "lianpo"]);
 			await player.removeSkills(["戢鳞", "英猷"]);
 			game.log(player, "觉醒了，减少了1点体力上限，失去了【戢鳞】、【英猷】，获得了【倾朝】、【鬼才】、【完杀】、【连破】");
@@ -1815,12 +1815,12 @@ const skills = {
 		locked: true,
 		forced: true,
 		mod: {
-			// ②使用与“志”花色相同的牌无距离限制
+			// ②使用与\"志\"花色相同的牌无距离限制
 			targetInRange(card, player) {
 				const zhi = player.getExpansions("倾朝");
 				if (zhi.some(c => get.suit(c) === get.suit(card))) return true;
 			},
-			// ③使用与所有“志”花色均不相同的牌无次数限制
+			// ③使用与所有\"志\"花色均不相同的牌无次数限制
 			cardUsable(card, player) {
 				const zhi = player.getExpansions("倾朝");
 				if (zhi.length && !zhi.some(c => get.suit(c) === get.suit(card))) return true;
@@ -1828,11 +1828,15 @@ const skills = {
 		},
 		trigger: {
 			player: ["loseAfter", "phaseAfter"],
-			global: ["equipAfter", "addJudgeAfter", "gainAfter", "loseAsyncAfter"]
+			global: ["equipAfter", "addJudgeAfter", "gainAfter", "loseAsyncAfter", "dieAfter"]
 		},
 		filter(event, player, name) {
 			if (name === "phaseAfter") {
 				return player.getExpansions("倾朝").length > 0;
+			}
+			// ④当你杀死一名角色时
+			if (name === "dieAfter") {
+				return event.source === player && player.getExpansions("倾朝").length > 0;
 			}
 			const evt = event.getl(player);
 			if (!evt || !evt.cards2 || !evt.cards2.length) return false;
@@ -1844,9 +1848,17 @@ const skills = {
 		async content(event, trigger, player) {
 			if (event.triggername === "phaseAfter") {
 				const zhi = player.getExpansions("倾朝");
-				const { bool, links } = await player.chooseButton(['移去一张“志”', zhi], true).forResult();
+				const { bool, links } = await player.chooseButton(['移去一张\"志\"', zhi], true).forResult();
 				if (bool) {
 					await player.loseToDiscardpile(links);
+				}
+			} else if (event.triggername === "dieAfter") {
+				// ④杀死角色后移去一张\"志\"，摸3张牌
+				const zhi = player.getExpansions("倾朝");
+				const { bool, links } = await player.chooseButton(['移去一张\"志\"', zhi], true).forResult();
+				if (bool) {
+					await player.loseToDiscardpile(links);
+					await player.draw(3);
 				}
 			} else {
 				const evt = trigger.getl(player);
@@ -1866,7 +1878,7 @@ const skills = {
 					if (player.isUnderControl(true)) {
 						dialog.addAuto(cards);
 					} else {
-						return "共有" + get.cnNumber(cards.length) + "张“志”";
+						return "共有" + get.cnNumber(cards.length) + "张\"志\"";
 					}
 				}
 			}
@@ -1878,6 +1890,217 @@ const skills = {
 			}
 		},
 		skill_id: "倾朝",
+		_priority: 0,
+	},
+	"冶武": {
+		audio: "ext:noname_diy:2",
+		forced: true,
+		locked: true,
+		trigger: {
+			player: ["phaseBegin", "useCard", "loseCard"],
+			source: "damageSource",
+		},
+		/**
+		 * 获取装备牌的摸牌数量
+		 * @param {object} card - 卡牌对象
+		 * @returns {number} 摸牌数量
+		 */
+		getDrawNum(card) {
+			// 若为武器牌，X为其攻击距离，否则为1
+			if (get.subtype(card) === "equip1") {
+				const info = lib.card[card.name];
+				if (info && info.distance) {
+					return 1 - (info.distance.attackFrom || 0);
+				}
+				return 1;
+			}
+			return 1;
+		},
+		init(player) {
+			player.storage.冶武_damageCount = 0;
+		},
+		filter(event, player, name) {
+			if (name === "phaseBegin") {
+				return true;
+			}
+			if (name === "useCard") {
+				return get.type(event.card) === "equip";
+			}
+			if (name === "loseCard") {
+				return event.cards.some(card => get.type(card) === "equip");
+			}
+			if (name === "damageSource") {
+				return event.num > 0;
+			}
+			return false;
+		},
+		async content(event, trigger, player) {
+			if (event.triggername === "phaseBegin") {
+				// ①回合开始时，若你有已废除的武器栏，你恢复一个武器栏，否则你获得一个额外的武器栏
+				const disabled = player.disabledSlots?.equip1 || 0;
+				if (disabled > 0) {
+					player.disabledSlots.equip1 -= 1;
+					player.$syncDisable();
+					game.log(player, `恢复了1个`, `#g武器栏`);
+				} else {
+					await player.expandEquip(1);
+				}
+				// 重置伤害计数
+				player.storage.冶武_damageCount = 0;
+			} else if (event.triggername === "damageSource") {
+				// ①每当你累计造成2点伤害时，触发武器栏效果
+				player.storage.冶武_damageCount = (player.storage.冶武_damageCount || 0) + trigger.num;
+				while (player.storage.冶武_damageCount >= 2) {
+					player.storage.冶武_damageCount -= 2;
+					const disabled = player.disabledSlots?.equip1 || 0;
+					if (disabled > 0) {
+						player.disabledSlots.equip1 -= 1;
+						player.$syncDisable();
+						game.log(player, `恢复了1个`, `#g武器栏`);
+					} else {
+						await player.expandEquip(1);
+					}
+				}
+			} else if (event.triggername === "useCard") {
+				// ②当你使用装备牌时，摸X张牌
+				const num = lib.skill.冶武.getDrawNum(trigger.card);
+				if (num > 0) {
+					await player.draw(num);
+				}
+			} else if (event.triggername === "loseCard") {
+				// ②当你失去装备牌时，摸X张牌
+				const lostEquips = trigger.cards.filter(card => get.type(card) === "equip");
+				for (const card of lostEquips) {
+					const num = lib.skill.冶武.getDrawNum(card);
+					if (num > 0) {
+						await player.draw(num);
+					}
+				}
+			}
+		},
+		skill_id: "冶武",
+		_priority: 0,
+	},
+	"炼刃": {
+		audio: "ext:noname_diy:2",
+		enable: "phaseUse",
+		filter(event, player) {
+			return player.hasCard(card => get.type(card) === "equip", "he");
+		},
+		filterCard(card, player) {
+			return get.type(card) === "equip";
+		},
+		selectCard: 1,
+		position: "he",
+		async content(event, trigger, player) {
+			const discardedCard = event.cards[0];
+			// 计算X：若为武器牌则X为其攻击距离，否则为1
+			const x = lib.skill.冶武.getDrawNum(discardedCard);
+			const choices = [];
+			choices.push(`获得一名其他角色的至多${x}张牌`);
+			choices.push(`依次对至多${x}名其他角色造成一点伤害`);
+			const result = await player.chooseControl(choices).set("prompt", "炼刃：选择一项").set("ai", () => {
+				if (x >= 3) {
+					return 1;
+				}
+				return 0;
+			}).forResult();
+			if (result.control === choices[0]) {
+				// 选项1：获得一名其他角色的至多X张牌
+				const targetResult = await player.chooseTarget("选择一名其他角色", (card, player, target) => {
+					return target !== player && target.countCards("he") > 0;
+				}, true).set("ai", target => {
+					return -get.attitude(player, target) * Math.min(target.countCards("he"), x);
+				}).forResult();
+				if (targetResult.bool && targetResult.targets && targetResult.targets.length) {
+					const target = targetResult.targets[0];
+					const num = Math.min(target.countCards("he"), x);
+					if (num > 0) {
+						await player.gainPlayerCard(target, num, "he");
+					}
+				}
+			} else if (result.control === choices[1]) {
+				// 选项2：依次对至多X名其他角色造成一点伤害
+				const targetResult = await player.chooseTarget(`选择至多${x}名其他角色`, (card, player, target) => {
+					return target !== player;
+				}, [1, x], true).set("ai", target => {
+					return -get.attitude(player, target);
+				}).forResult();
+				if (targetResult.bool && targetResult.targets && targetResult.targets.length) {
+					for (const target of targetResult.targets) {
+						await target.damage();
+					}
+				}
+			}
+		},
+		ai: {
+			order: 8,
+			result: {
+				player: 1,
+			},
+		},
+		skill_id: "炼刃",
+		_priority: 0,
+	},
+	"穷兵": {
+		audio: "ext:noname_diy:2",
+		forced: true,
+		locked: true,
+		trigger: {
+			player: "dying",
+		},
+		filter(event, player) {
+			// 若你有未废除的武器栏
+			return player.hasEnabledSlot(1);
+		},
+		async content(event, trigger, player) {
+			player.logSkill(event.skill);
+			// 废除一个武器栏
+			const expanded = player.expandedSlots?.equip1 || 0;
+			if (expanded > 0) {
+				player.expandedSlots.equip1 -= 1;
+				player.$syncExpand();
+				game.log(player, `减少了1个`, `#g武器栏上限`);
+			} else {
+				player.disabledSlots ??= {};
+				player.disabledSlots.equip1 ??= 0;
+				player.disabledSlots.equip1 += 1;
+				player.$syncDisable();
+				game.log(player, `废除了1个`, `#g武器栏`);
+			}
+			
+			// 将体力恢复至1点
+			if (player.hp < 1) {
+				await player.recoverTo(1);
+			}
+			
+			// 摸装备栏数张牌
+			const equipSlotCount = player.countEnabledSlot();
+			if (equipSlotCount > 0) {
+				await player.draw(equipSlotCount);
+			}
+			
+			// 对一名其他角色造成一点伤害
+			const targetResult = await player.chooseTarget("选择一名其他角色造成一点伤害", (card, player, target) => {
+				return target !== player;
+			}, true).set("ai", target => {
+				return -get.attitude(player, target);
+			}).forResult();
+			if (targetResult.bool && targetResult.targets && targetResult.targets.length) {
+				const target = targetResult.targets[0];
+				await target.damage();
+			}
+		},
+		ai: {
+			effect: {
+				target(card, player, target) {
+					if (get.tag(card, "damage") && target.hp <= 0 && target.hasEnabledSlot(1)) {
+						return [1, 0.5];
+					}
+				},
+			},
+		},
+		skill_id: "穷兵",
 		_priority: 0,
 	},
 };

@@ -90,6 +90,7 @@ export default function () {
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
 | 应天司马懿（shen，4/4） | 戢鳞、英猷（英猷_seal/英猷_skip）、应天（觉醒技）、倾朝 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
+| 神冶（shen，4/4） | 冶武、炼刃、穷兵（觉醒技）、黩武 | 武器栏扩展 + 武器牌资源 + 觉醒后装备牌转化 + 伤害抉择 |
 
 ---
 
@@ -500,6 +501,71 @@ export default function () {
 - **AI**：两处 chooseButton 的 ai 都在存在**敌方**可指定目标时才返回正数，且优先移去低价值"疑兵"（`4 - get.value(button.link, me)`）；②对杀/伤害类锦囊加权（`5 - ...`）。
 
 **关键 API：** `mod.targetInRange` / `mod.cardUsable` / `useCard2` / `get.type2` / `directHit.addArray` / `chooseTarget([num,num])` / `targetEnabled2` / `trigger.targets.addArray` / `baseDamage++` / `loseToDiscardpile` / `get.tag(card,"damage")`。
+
+---
+
+## 2.6 神冶
+
+### 2.6.0 冶武
+
+**文案：**
+> 锁定技。①回合开始或每当你累计造成2点伤害时，若你有已废除的武器栏，你恢复一个武器栏，否则你获得一个额外的武器栏。②当你使用或失去装备牌时，摸X张牌（若该装备牌为武器牌，则X为其攻击距离，否则为1）。
+
+**设计点：**
+1. 武器栏管理：优先恢复已废除的武器栏，没有废除的才增加新栏位。
+2. 伤害联动：累计造成2点伤害时触发武器栏效果，提高触发频率。
+3. 装备牌联动：使用或失去装备牌时摸牌，武器牌根据攻击距离摸牌，其他装备牌摸1张。
+
+**实现要点：**
+- **触发**：`trigger:{player:["phaseBegin","useCard","loseCard"],source:"damageSource"}`，用 `filter` 第三个参数区分时机。
+- **锁定技**：`locked:true` + `forced:true`。
+- **伤害计数**：`player.storage.冶武_damageCount` 记录累计伤害，每累计2点触发一次，回合开始时重置。
+- **content**：回合开始或伤害触发时检查 `disabledSlots`，有废除的栏位则恢复，否则调用 `expandEquip(1)`；使用/失去装备牌时，根据 `getDrawNum` 函数计算摸牌数。
+
+**关键 API：** `expandEquip` / `disabledSlots` / `$syncDisable` / `getDrawNum` / `draw` / `damageSource`。
+
+---
+
+### 2.6.1 炼刃
+
+**文案：**
+> 出牌阶段，你可以弃置一张装备牌，然后选择一项：1、获得一名其他角色的至多X张牌（若该装备牌为武器牌，则X为其攻击距离，否则为1）；2、依次对至多X名其他角色造成一点伤害。
+
+**设计点：**
+1. 装备牌资源管理：弃置装备牌触发两种效果，提供灵活选择。
+2. 选项1：获得其他角色的牌，X根据装备牌类型计算，最多获得X张。
+3. 选项2：对多名角色造成伤害，X根据装备牌类型计算。
+
+**实现要点：**
+- **主动技能**：`enable:"phaseUse"` + `filterCard` 检查装备牌。
+- **content**：弃置后 `chooseControl` 两选项，分别执行不同效果。
+- **选项1**：`chooseTarget` 选择目标，`gainPlayerCard` 获得牌，使用 `Math.min(target.countCards("he"), x)` 限制数量。
+- **选项2**：`chooseTarget` 选择多个目标，`damage` 造成伤害。
+
+**关键 API：** `gainPlayerCard` / `chooseTarget` / `damage` / `getDrawNum`。
+
+---
+
+### 2.6.2 穷兵
+
+**文案：**
+> 锁定技。当你进入濒死状态时，若你有未废除的武器栏，你废除一个武器栏，然后将体力恢复至1点，摸装备栏数张牌并对一名其他角色造成一点伤害。
+
+**设计点：**
+1. 保命技：进入濒死状态时自动触发，提供生存能力。
+2. 可多次发动：没有次数限制，每次濒死都可以发动。
+3. 伤害联动：对一名角色造成1点伤害，可联动冶武的伤害累计效果。
+4. 代价：废除一个武器栏，减少后续的武器栏恢复机会。
+
+**实现要点：**
+- **锁定技**：`forced:true` + `locked:true`。
+- **触发**：`trigger:{player:"dying"}`。
+- **filter**：`player.hasEnabledSlot(1)` 检查是否有未废除的武器栏。
+- **content**：废除一个武器栏（优先减少 `expandedSlots`，否则增加 `disabledSlots`）；`recoverTo(1)` 恢复体力；`draw(countEnabledSlot())` 摸牌；`chooseTarget` + `damage` 造成伤害。
+
+**关键 API：** `hasEnabledSlot` / `expandedSlots` / `disabledSlots` / `$syncExpand` / `$syncDisable` / `recoverTo` / `countEnabledSlot` / `draw` / `chooseTarget` / `damage`。
+
+---
 
 ---
 
