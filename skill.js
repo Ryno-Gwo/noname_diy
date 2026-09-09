@@ -1897,7 +1897,12 @@ const skills = {
 		forced: true,
 		locked: true,
 		trigger: {
-			player: ["phaseBegin", "useCard", "loseCard"],
+			// 失去感知时机集合参考官方枭姬(xiaoji, standard.js):
+			// 自己主动失去(弃置/被拆等独立 lose) -> player:"loseAfter";
+			// 他人夺走(gain, 含义贤/定州) -> global:"gainAfter"; 多人失去 -> "loseAsyncAfter";
+			// 装备被顶替 -> "equipAfter"; 移至判定区/武将牌 -> addJudgeAfter/addToExpansionAfter
+			player: ["phaseBegin", "useCard", "loseAfter"],
+			global: ["equipAfter", "addJudgeAfter", "gainAfter", "loseAsyncAfter", "addToExpansionAfter"],
 			source: "damageSource",
 		},
 		/**
@@ -1926,8 +1931,13 @@ const skills = {
 			if (name === "useCard") {
 				return get.type(event.card) === "equip";
 			}
-			if (name === "loseCard") {
-				return event.cards.some(card => get.type(card) === "equip");
+			if (name === "loseAfter" || name === "equipAfter" || name === "addJudgeAfter" || name === "gainAfter" || name === "loseAsyncAfter" || name === "addToExpansionAfter") {
+				// 只认"装备区内的牌"失去(参考枭姬 getIndex 判 evt.es):
+				// 使用装备时新手牌是从手牌失去(hs), 不算失去装备, 避免与 useCard 时机重复摸牌;
+				// 被抢/被拆/被顶替等装备区(es)的牌失去才触发
+				const evt = event.getl(player);
+				if (!evt || evt.player !== player || !evt.es || !evt.es.length) return false;
+				return true;
 			}
 			if (name === "damageSource") {
 				return event.num > 0;
@@ -1967,13 +1977,16 @@ const skills = {
 				if (num > 0) {
 					await player.draw(num);
 				}
-			} else if (event.triggername === "loseCard") {
-				// ②当你失去装备牌时，摸X张牌
-				const lostEquips = trigger.cards.filter(card => get.type(card) === "equip");
-				for (const card of lostEquips) {
-					const num = lib.skill.冶武.getDrawNum(card);
-					if (num > 0) {
-						await player.draw(num);
+			} else {
+				// ②当你失去装备区内的装备牌时，每张摸X张牌
+				// (含被其他角色抢走、被弃置、被新装备顶替等一切装备区牌的失去途径)
+				const evt = trigger.getl(player);
+				if (evt && evt.es) {
+					for (const card of evt.es) {
+						const num = lib.skill.冶武.getDrawNum(card);
+						if (num > 0) {
+							await player.draw(num);
+						}
 					}
 				}
 			}
@@ -1987,51 +2000,101 @@ const skills = {
 		filter(event, player) {
 			return player.hasCard(card => get.type(card) === "equip", "he");
 		},
-		filterCard(card, player) {
-			return get.type(card) === "equip";
+		subSkill: {
+			backup: {},
 		},
-		selectCard: 1,
-		position: "he",
-		async content(event, trigger, player) {
-			const discardedCard = event.cards[0];
-			// 计算X：若为武器牌则X为其攻击距离，否则为1
-			const x = lib.skill.冶武.getDrawNum(discardedCard);
-			const choices = [];
-			choices.push(`获得一名其他角色的至多${x}张牌`);
-			choices.push(`依次对至多${x}名其他角色造成一点伤害`);
-			const result = await player.chooseControl(choices).set("prompt", "炼刃：选择一项").set("ai", () => {
-				if (x >= 3) {
-					return 1;
+		// 先选效果(选项1/2), 再选装备牌, 再以系统拖拽指定目标
+		chooseButton: {
+			dialog(event, player) {
+				const dialog = ui.create.dialog("炼刃：选择一项", "hidden");
+				dialog.add([
+					[
+						["get", "获得一名其他角色的至多X张牌"],
+						["damage", "依次对至多X名其他角色各造成一点伤害"],
+					],
+					"textbutton",
+				]);
+				return dialog;
+			},
+			check(button) {
+				const player = get.player();
+				if (button.link === "damage") {
+					return game.hasPlayer(target => target !== player && get.attitude(player, target) < 0) ? 2 : 0;
 				}
-				return 0;
-			}).forResult();
-			if (result.control === choices[0]) {
-				// 选项1：获得一名其他角色的至多X张牌
-				const targetResult = await player.chooseTarget("选择一名其他角色", (card, player, target) => {
-					return target !== player && target.countCards("he") > 0;
-				}, true).set("ai", target => {
-					return -get.attitude(player, target) * Math.min(target.countCards("he"), x);
-				}).forResult();
-				if (targetResult.bool && targetResult.targets && targetResult.targets.length) {
-					const target = targetResult.targets[0];
-					const num = Math.min(target.countCards("he"), x);
-					if (num > 0) {
-						await player.gainPlayerCard(target, num, "he");
-					}
+				return 1;
+			},
+			backup(links, player) {
+				const isGet = links[0] === "get";
+				return {
+					audio: "ext:noname_diy:2",
+					position: "he",
+					// 引擎不自动弃牌, 由 content 内手动弃置所选的装备牌
+					discard: false,
+					lose: false,
+					delay: false,
+					filterCard(card) {
+						return get.type(card) === "equip";
+					},
+					check(card) {
+						return 8 - get.value(card);
+					},
+					selectCard: 1,
+					filterTarget(card, player, target) {
+						if (isGet) {
+							return target !== player && target.countCards("he") > 0;
+						}
+						return target !== player;
+					},
+					selectTarget: isGet ? 1 : [1, Infinity],
+					filterOk() {
+						if (isGet) return true;
+						// 目标数不能超过所选装备牌决定的X
+						const { cards, targets } = ui.selected;
+						if (!cards || !cards.length) return false;
+						const x = lib.skill.冶武.getDrawNum(cards[0]);
+						return targets.length >= 1 && targets.length <= x;
+					},
+					// 引擎对每个目标各执行一次 content(event.target 依次指向所选目标),
+					// 故此处只处理单个 event.target 即可保证每个目标恰好受到一点伤害;
+					// 弃牌只在第一个目标结算时(num===0)执行一次
+					async content(event, trigger, player) {
+						const discardedCard = event.cards[0];
+						const x = lib.skill.冶武.getDrawNum(discardedCard);
+						const target = event.target;
+						if (event.num === 0) {
+							// 弃置所选装备牌
+							await player.discard(discardedCard);
+						}
+						if (isGet) {
+							// 选项1：获得一名其他角色的至多X张牌
+							const num = Math.min(target.countCards("he"), x);
+							if (num > 0) {
+								await player.gainPlayerCard(target, num, "he");
+							}
+						} else {
+							// 选项2：对该目标造成一点伤害
+							await target.damage();
+						}
+					},
+					ai: {
+						order: 8,
+						result: {
+							target(player, target) {
+								if (isGet) {
+									return -get.attitude(player, target) * Math.min(target.countCards("he"), 2);
+								}
+								return -get.attitude(player, target);
+							},
+						},
+					},
+				};
+			},
+			prompt(links, player) {
+				if (links[0] === "get") {
+					return "弃置一张装备牌，获得一名其他角色的至多X张牌";
 				}
-			} else if (result.control === choices[1]) {
-				// 选项2：依次对至多X名其他角色造成一点伤害
-				const targetResult = await player.chooseTarget(`选择至多${x}名其他角色`, (card, player, target) => {
-					return target !== player;
-				}, [1, x], true).set("ai", target => {
-					return -get.attitude(player, target);
-				}).forResult();
-				if (targetResult.bool && targetResult.targets && targetResult.targets.length) {
-					for (const target of targetResult.targets) {
-						await target.damage();
-					}
-				}
-			}
+				return "弃置一张装备牌，依次对至多X名其他角色各造成一点伤害";
+			},
 		},
 		ai: {
 			order: 8,

@@ -90,7 +90,7 @@ export default function () {
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
 | 应天司马懿（shen，4/4） | 戢鳞、英猷（英猷_seal/英猷_skip）、应天（觉醒技）、倾朝 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
-| 神冶（shen，4/4） | 冶武、炼刃、穷兵（觉醒技）、黩武 | 武器栏扩展 + 武器牌资源 + 觉醒后装备牌转化 + 伤害抉择 |
+| 神冶（shen，4/4） | 冶武、炼刃、穷兵 | 武器栏增减经济 + 弃装备牌抉择（拿牌/伤害）+ 濒死保命 |
 
 ---
 
@@ -517,12 +517,14 @@ export default function () {
 3. 装备牌联动：使用或失去装备牌时摸牌，武器牌根据攻击距离摸牌，其他装备牌摸1张。
 
 **实现要点：**
-- **触发**：`trigger:{player:["phaseBegin","useCard","loseCard"],source:"damageSource"}`，用 `filter` 第三个参数区分时机。
+- **触发**：`trigger:{player:["phaseBegin","useCard","loseAfter"],global:["equipAfter","addJudgeAfter","gainAfter","loseAsyncAfter","addToExpansionAfter"],source:"damageSource"}`，用 `filter` 第三个参数区分时机。
+- **失去装备的时机集合参考官方枭姬（xiaoji, standard.js）**：`gain` 事件的 content 会对每个被抢者调用 `owner.lose(...)`（type:"gain"）产生子 lose，但此类**带 type 的转移子 lose 不触发 loseAfter**（引擎统一在该转移事件的 After 时机通知），因此他人夺走装备（义贤/定州 = gain 事件）必须监听 `global:"gainAfter"` 而非 loseAfter；多人同时失去走 `loseAsyncAfter`；装备被新装备顶替走 `equipAfter`；移至判定区/武将牌走对应 After；自己主动失去（弃置/被拆等独立 lose）走 `player:"loseAfter"`。
+- **失去统计只认装备区（evt.es）**（参考枭姬 getIndex 判 `evt.es`）：使用装备时新手牌是从手牌失去（记录在 hs），不算"失去装备"，避免与 useCard 时机重复摸牌；被抢/被拆/被顶替的装备区牌（es）才触发。
 - **锁定技**：`locked:true` + `forced:true`。
 - **伤害计数**：`player.storage.冶武_damageCount` 记录累计伤害，每累计2点触发一次，回合开始时重置。
-- **content**：回合开始或伤害触发时检查 `disabledSlots`，有废除的栏位则恢复，否则调用 `expandEquip(1)`；使用/失去装备牌时，根据 `getDrawNum` 函数计算摸牌数。
+- **content**：回合开始或伤害触发时检查 `disabledSlots`，有废除的栏位则恢复，否则调用 `expandEquip(1)`；使用装备时按 `getDrawNum` 摸牌，失去时遍历 `trigger.getl(player).es` 每张各摸一次。
 
-**关键 API：** `expandEquip` / `disabledSlots` / `$syncDisable` / `getDrawNum` / `draw` / `damageSource`。
+**关键 API：** `expandEquip` / `disabledSlots` / `$syncDisable` / `getDrawNum` / `draw` / `damageSource` / `getl` / `gainAfter` / `equipAfter` / `loseAsyncAfter`。
 
 ---
 
@@ -537,12 +539,15 @@ export default function () {
 3. 选项2：对多名角色造成伤害，X根据装备牌类型计算。
 
 **实现要点：**
-- **主动技能**：`enable:"phaseUse"` + `filterCard` 检查装备牌。
-- **content**：弃置后 `chooseControl` 两选项，分别执行不同效果。
-- **选项1**：`chooseTarget` 选择目标，`gainPlayerCard` 获得牌，使用 `Math.min(target.countCards("he"), x)` 限制数量。
-- **选项2**：`chooseTarget` 选择多个目标，`damage` 造成伤害。
+- **交互顺序**：出牌阶段点技能 → 先弹竖排技能选项（义贤式 textbutton，选"拿牌/伤害"）→ 再选一张装备牌 → 再以系统鼠标拖拽一键指定目标（摧决式）。
+- **主技能**：`enable:"phaseUse"` + `filter` 检查有装备牌可弃 + `subSkill:{backup:{}}`。
+- **选项弹窗**：`chooseButton.dialog` 用 `ui.create.dialog(...)` + `dialog.add([[[key,label]...],"textbutton"])` 竖排选项；`backup(links)` 读 `links[0]` 分支（拿牌 or 伤害），返回带 `filterCard(装备)/selectCard:1/position:"he"/selectTarget/filterOk/content` 的对象。
+- **弃牌**：backup 设 `discard:false`，content 内手动 `player.discard`（backup 型技能引擎不自动弃牌）。
+- **⚠️ 多目标结算**：非 `multitarget` 的主动技 content 会**对每个目标各执行一次**（`event.target` 依次指向所选目标，`event.num` 递增），故 content 只对单数 `event.target` 结算即可保证每个目标恰好受1点伤害/一次拿牌；一次性副作用（弃牌）放 `if (event.num===0)` 内。切勿在 content 里遍历 `event.targets` 结算（会每人重复结算 N 次）。
+- **动态目标上限**：`selectTarget:[1,Infinity]` + `filterOk()` 读 `ui.selected.cards[0]` 由 `getDrawNum` 算出 X 限制目标数（超限点确定自动取消重选）。
+- **选项1**：`gainPlayerCard(target, min(target.countCards("he"), x))`；**选项2**：`target.damage()`。
 
-**关键 API：** `gainPlayerCard` / `chooseTarget` / `damage` / `getDrawNum`。
+**关键 API：** `chooseButton` / `backup` / `textbutton` / `filterOk` / `ui.selected` / `discard` / `gainPlayerCard` / `damage` / `getDrawNum`。
 
 ---
 
@@ -613,3 +618,5 @@ export default function () {
 40. **结束出牌阶段的正确做法**：参考巧说（reqiaoshui）`event.getParent(3).skipped = true`。对于 `trigger: { global: "useCard" }` 的技能，`trigger` 本身就是 useCard 事件，`trigger.getParent("phaseUse")` 可获取出牌阶段事件。⚠️ **必须在 `await useCard` 之前**保存 phaseUse 引用——`await` 之后事件链可能改变导致引用失效。正确模式：`const phaseUse = trigger.getParent("phaseUse");` → `await player.useCard(...);` → `phaseUse.skipped = true;`（应天司马懿·英猷）。
 41. **内置技能的内部名 ≠ 中文显示名**：游戏内置技能（如鬼才、完杀、连破等）在 `addSkills`/`removeSkills` 等 API 中必须使用**内部标识符**（如 `reguicai`、`rewansha`、`lianpo`），不能用中文翻译名。可在原版武将包（如 `extra.js`）中搜索 `derivation` 字段找到正确的内部名（应天司马懿·应天）。
 42. **⚠️ `targetInRange` mod 返回值语义**：`targetInRange(card, player, target)` mod 中，返回 `true` = 目标在范围内（无距离限制）；返回 `false` = **强制判定为目标超出距离**（不可使用）；返回 `undefined`（不返回）= 不修改，按正常距离计算。⚠️ 常见错误：`return zhi.some(c => get.suit(c) === get.suit(card))`——当花色不匹配时 `.some()` 返回 `false`，导致该花色的牌**永远无法使用**（被强制判定为超出距离）。正确写法：`if (zhi.some(...)) return true;`，不匹配时隐式返回 `undefined`，让引擎正常计算距离（应天司马懿·倾朝）。
+43. **⚠️ 察觉"自己失去装备/牌"须参考官方枭姬（xiaoji, standard.js）的时机集合**（神冶·冶武，2026-09 更正）：① 他人夺走自己的牌（义贤 `player.gain(cards,"give")`、定州 `player.gain(cards,"give",target)`）产生的是 **gain 事件**，其 content 会对每个被抢者 `owner.lose(...)`（type:"gain"）产生子 lose——但此类**带 type 的转移子 lose 不触发 loseAfter**，引擎统一在转移事件自身的 After 时机通知，所以监听 `global:["loseAfter","loseAsyncAfter"]` 抓不到抢牌，**必须监听 `global:"gainAfter"`**（gain 事件的 `getl(player)` 会聚合其下子 lose，能取到被抢者失去的牌）。② 完整失去感知集合：`player:"loseAfter"`（自己弃置/被拆等独立 lose）+ `global:["equipAfter","addJudgeAfter","gainAfter","loseAsyncAfter","addToExpansionAfter"]`。③ **失去统计只认 `evt.es`（装备区失去）**：使用装备时新手牌从手牌失去记录在 hs 不算失去装备，否则会与 useCard 时机重复触发（“使用装备摸两次”）；按需在 filter 判断 `evt.player === player && evt.es?.length`。
+44. **⚠️ 主动技 content 按目标逐个执行 + chooseButton backup 常见坑**（神冶·炼刃）：① 非 `multitarget` 的 useSkill 型主动技（含 chooseButton 的 backup 技能）content 会**对每个目标各执行一次**（每轮 `event.target` 单数依次指向所选目标、`event.num` 递增，多目标时 targets 先按座次排序并自动高亮/画线）。**切勿在 content 里遍历 `event.targets` 结算**——否则每人会被重复结算 N 次（曾出现"每个目标连续受 X 点伤害"）。正确做法：content 只处理单数 `event.target`（每个目标恰好结算一次），一次性副作用（如弃牌）放 `if (event.num === 0)` 内只执行一次。② **不要在 backup 型主技能的 precontent 里覆盖 `event.result.skill` 为主容器技能名**：主技能是 chooseButton 容器、本身没有 content，引擎应自动走 `技能_backup`（backup() 返回对象自带 content）；若强行把 result.skill 设回主技能名，useSkill 会取到 undefined content → ContentCompiler 报 `Cannot read properties of undefined (reading 'compiled')`。③ backup 型技能引擎**不自动弃牌**，需在 backup 返回对象设 `discard:false` 并在 content 内手动 `player.discard`。
