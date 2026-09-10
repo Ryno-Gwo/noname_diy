@@ -292,27 +292,28 @@ export default function () {
 ### 2.1.2 止涕（含 止涕_mark）
 
 **文案：**
-> 当你对其他角色造成伤害时，若你拥有来源于其的技能，你令其获得一枚其未拥有的标记：【止戈】废除1个由你指定的装备栏；【血俎】降低1点体力上限（至多降为1）；【失魂】失去1个由你指定的技能。若如此做，你增加1点体力上限。
+> 当你对其他角色造成伤害时，若你拥有来源于其的技能，你增加1点体力上限，然后令其获得一枚其未拥有的标记：【止戈】废除1个由你指定的装备栏；【血俎】降低1点体力上限（至多降为1）；【失魂】失去1个由你指定的技能。
 
 **设计点：**
 1. 与夺魂的"来源技能"挂钩：拥有来源于目标的技能才能发动。
 2. 标记系统：三种标记（止戈/血俎/失魂），每种只能获得一次，标记永久存在。
 3. 标记即效果：获得标记时立即执行对应效果。
-4. 成功添加标记后增加1点体力上限——弥补夺魂消耗上限后的成长缺口，避免上限降为1后无法恢复的隐藏困境。
+4. 造成伤害且拥有来源技能即先增加1点体力上限（前置、与标记无关）——弥补夺魂消耗上限后的成长缺口，避免上限降为1后无法恢复的隐藏困境。
 5. 强制发动（`forced:true`）：满足条件即自动执行，无需询问。
 
 **实现要点：**
-- **触发**：`source:"damageSource"` + `forced:true`，`filter` 判目标≠自己、未死亡、`countFromSource>0`、且目标尚未拥有全部三种标记。
+- **触发**：`source:"damageSource"` + `forced:true`，`filter` 判目标≠自己、未死亡、`countFromSource>0`（不要求目标尚有可加标记）。
+- **日志目标**：技能设 `logTarget:"player"`，引擎在触发时自动记录“对目标发动了【止涕】”并画线（content 内 `event.skill` 为 undefined，见踩坑#30，故不在 content 手动 logSkill）。
 - **标记存储**：`target.markAuto("止涕_mark", [选择的标记名])` 统一存储，`target.addSkill("止涕_mark")` 注册展示技能。`getStorage("止涕_mark")` 返回已拥有标记数组。
 - **选项过滤**：`controls` 数组根据 `owned = target.getStorage("止涕_mark") || []` 动态构建，只显示目标未拥有的标记类型。
 - **【止戈】废装备栏**：收集可用栏 `hasEnabledSlot`（3/4 位合并为 `equip3_4`）→ `chooseControl` 选一个 → `disableEquip`。
 - **【血俎】降上限**：`if(target.maxHp > 1) target.loseMaxHp()`，直接降到1。
 - **【失魂】去技能**：`lib.skill.夺魂.getSkills(target)` 获取目标技能 → `filter(s => !lib.skill[s]?.charlotte)` 排除 charlotte 技 → `chooseButton` 选一个 → `target.removeSkill`。
-- **增加上限**：标记效果执行完毕后 `await player.gainMaxHp()`，无论选择了哪种标记。
+- **增加上限（前置）**：content 开头先 `await player.gainMaxHp()`，与是否添加标记无关；目标标记已满时不弹出选择，直接结束。
 - **标记展示**：`止涕_mark` 为 `charlotte` 子技能，`intro:{name:"止涕", content(storage){...}}` 显示已拥有标记。
-- **AI**：`ai.effect.target` 里对有来源技能且标记未满（<3）的目标，提高伤害牌价值（`current + 0.3`）；选择标记时优先失魂（如有技能）、其次血俎（如上限>1）、最后止戈。
+- **AI**：`ai.effect.target` 里对有来源技能的目标提高伤害牌价值（`current + 0.3`，不再要求标记未满）；选择标记时优先失魂（如有技能）、其次血俎（如上限>1）、最后止戈，对好感度≥0的目标取消。
 
-**关键 API：** `forced` / `damageSource` / `countFromSource` / `markAuto` / `getStorage` / `addSkill` / `hasEnabledSlot` / `disableEquip` / `loseMaxHp` / `removeSkill` / `gainMaxHp` / `chooseControl` / `chooseButton` / `intro.content` / `charlotte`。
+**关键 API：** `forced` / `damageSource` / `logTarget` / `countFromSource` / `markAuto` / `getStorage` / `addSkill` / `hasEnabledSlot` / `disableEquip` / `loseMaxHp` / `removeSkill` / `gainMaxHp` / `chooseControl` / `chooseButton` / `intro.content` / `charlotte`。
 
 ---
 
@@ -605,7 +606,7 @@ export default function () {
 27. **⚠️ 觉醒技动画机制（重要踩坑）**：`skillAnimation: true` 写在技能定义上时，`trySkillAnimate` 会在**每次 `logSkill` 调用时**播放动画，而非仅在觉醒时。对于"攒够条件才觉醒"的连续触发型觉醒技（如疑兵：每回合触发，但攒够牌才觉醒），会导致**每次触发都播动画**。正确做法：**不在技能定义上写 `skillAnimation`**，而是在 `content` 里觉醒条件满足时**手动调用** `player.$skill("技能名", "legend", "wood", "main")`，然后再 `player.awakenSkill()`。⚠️ 第4个参数 `"main"` 必须传，否则 `avatar` 为 falsy 会走 `playerfocus` 分支而非 `playerfocus2` 分支，动画效果不同（`trySkillAnimate` 在 `skill_animation_type == "default"` 时会设 `checkShow = "main"`）。引擎调用链：`logSkill` → `trySkillAnimate` → 检查 `lib.skill[name].skillAnimation` → `player.$skill(name, type, color, checkShow)` → `$legend(1200)` + `$fullscreenpop(name, color, avatar)`。
 28. **⚠️ `group` 会覆盖主技能的 trigger**：当主技能有 `group:["xxx"]` 时，引擎用 group 中子技能的 trigger **替代**主技能自身的 trigger 进行匹配。若子技能只定义了 `trigger:{global:"_saveAfter"}`，则主技能的 `trigger:{global:"gameStart"}` 不再生效——`gameStart` 时引擎检查的是 `_saveAfter`，不匹配，整个技能静默跳过。**解决方案**：不用 `group`，将所有 trigger 写在主技能上（如 `trigger:{global:["gameStart","_saveAfter"]}`），用 `filter` 的第三个参数 `name` 和 `content` 里的 `event.triggername` 区分不同触发时机的逻辑。
 29. **⚠️ `logSkill` 不执行效果**：`player.logSkill(skillName)` 仅显示技能名气泡动画+播放语音，**不会执行任何游戏效果**。不能用 `if(条件){ player.logSkill(skill); return; }` 来代替实际的 content 逻辑——这会导致技能看起来触发了（有动画），但实际什么都没发生。正确做法：在 content 里直接写效果逻辑，需要动画时在效果执行前调用 `logSkill`。
-30. **⚠️ content 事件中 `event.skill` 为 `undefined`**：引擎 `createTrigger`（content.js）创建 content 事件时用 `game.createEvent(event.skill)` 但未设置 `next.skill`，导致 content 函数内 `event.skill` 为 `undefined`，`get.prompt(event.skill)` 显示"是否发动【】？"。cost 事件有 `next2.skill = event.skill` 所以正常。**不改引擎的解法**：用 `event.name` 代替 `event.skill`——因为 `game.createEvent(event.skill)` 以技能名作为事件名，`event.name` 即为技能名字符串。用法：`get.prompt(event.name)` 代替 `get.prompt(event.skill)`。
+30. **⚠️ content 事件中 `event.skill` 为 `undefined`**：引擎 `createTrigger`（content.js）创建 content 事件时用 `game.createEvent(event.skill)` 但未设置 `next.skill`，导致 content 函数内 `event.skill` 为 `undefined`，`get.prompt(event.skill)` 显示"是否发动【】？"。cost 事件有 `next2.skill = event.skill` 所以正常。**不改引擎的解法**：用 `event.name` 代替 `event.skill`——因为 `game.createEvent(event.skill)` 以技能名作为事件名，`event.name` 即为技能名字符串。用法：`get.prompt(event.name)` 代替 `get.prompt(event.skill)`。同理，content 内手动 `logSkill(event.skill)` 传入 undefined 实际只画线、不记日志；触发技更优解法是在技能对象上设 `logTarget:"player"`（或函数），由引擎在触发时解析目标并自动记录“对目标发动了【技能】”+画线（止涕）。
 31. **⚠️ `prompt` 属性 vs `direct: true` vs `forced: true`**：`prompt: "是否发动【技能名？"` 属性会让引擎**自动弹出 `chooseBool` 询问**（不设 `direct` 也不设 `forced` 时）。`direct: true` 则**完全跳过询问**，直接进入 content。`forced: true` 也跳过询问且无法取消。对于文案中有"你可以"的可选触发技能，应使用 `prompt` 属性，不需要设 `direct`/`forced`，也不需要在 content 里手动写 `chooseBool`（应天司马懿·戢鳞/英猷）。
 32. **`get.cards(n)` 返回待处理区的牌**：`get.cards(n)` 从牌堆顶取 n 张牌，返回的牌在**待处理区**（ordering area），不属于任何玩家的手牌区。可以直接传给 `showCards`、`chooseCardButton`、`addToExpansion` 或 `target.gain`。典型模式（参考疑兵选项一）：`get.cards(2)` → `showCards` → `chooseCardButton` → `game.broadcastAll(ui.clear)` → 对选中/剩余牌分别处理。⚠️ 不要用 `player.draw(n)` + `player.getCards("h").slice(-n)` 的方式模拟"从牌堆取牌到待处理区"——那会先让牌进入手牌区再截取，语义不同且会触发不必要的 gain 事件（应天司马懿·戢鳞）。
 33. **`addToExpansion` 的 gaintag 写法**：放牌到扩展区后设置 gaintag，正确写法是链式调用 `next.gaintag.add("tag")`，**不是** `.set("gaintag", ["tag"])`。后者会覆盖 gaintag 属性而非追加。放牌后需显式 `player.markSkill("技能名")` 刷新标记显示（踩坑#15 已提及，此处强调 API 写法差异）（应天司马懿·戢鳞）。

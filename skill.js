@@ -270,20 +270,13 @@ const skills = {
 		trigger: {
 			source: "damageSource",
 		},
+		logTarget: "player",
 		filter(event, player) {
 			const target = event.player;
 			if (!target || target === player || target.isDead()) {
 				return false;
 			}
-			if (lib.skill.止涕.countFromSource(player, target) <= 0) {
-				return false;
-			}
-			const owned = target.getStorage("止涕_mark") || [];
-			return (
-				!owned.includes("止戈") ||
-				!owned.includes("血俎") ||
-				!owned.includes("失魂")
-			);
+			return lib.skill.止涕.countFromSource(player, target) > 0;
 		},
 		countFromSource(player, target) {
 			const map = player.storage.夺魂_sources || {};
@@ -294,6 +287,8 @@ const skills = {
 		forced: true,
 		async content(event, trigger, player) {
 			const target = trigger.player;
+			// 前置：增加1点体力上限，与是否添加标记无关
+			await player.gainMaxHp();
 			const owned = target.getStorage("止涕_mark") || [];
 			const controls = [];
 			if (!owned.includes("止戈")) {
@@ -305,13 +300,17 @@ const skills = {
 			if (!owned.includes("失魂")) {
 				controls.push("失魂");
 			}
+			// 标记已满：仅执行前置加上限，不再询问
+			if (!controls.length) {
+				return;
+			}
 			controls.push("cancel2");
 			const result = await player
 				.chooseControl(controls)
 				.set("prompt", get.prompt(event.name, target))
 				.set(
 					"prompt2",
-					"令其获得一枚其未拥有的标记：【止戈】废除1个装备栏；【血俎】降低1点体力上限；【失魂】失去1个技能。若如此做，你增加1点体力上限。",
+					"令其获得一枚其未拥有的标记：【止戈】废除1个装备栏；【血俎】降低1点体力上限；【失魂】失去1个技能。",
 				)
 				.set("ai", () => {
 					const me = _status.event.player;
@@ -337,7 +336,6 @@ const skills = {
 			if (result.control === "cancel2") {
 				return;
 			}
-			player.logSkill(event.skill, target);
 			target.markAuto("止涕_mark", [result.control]);
 			target.addSkill("止涕_mark");
 			if (result.control === "止戈") {
@@ -409,7 +407,6 @@ const skills = {
 					}
 				}
 			}
-			await player.gainMaxHp();
 		},
 		ai: {
 			effect: {
@@ -419,10 +416,7 @@ const skills = {
 						get.tag(card, "damage") > 0 &&
 						lib.skill.止涕.countFromSource(player, target) > 0
 					) {
-						const owned = target.getStorage("止涕_mark") || [];
-						if (owned.length < 3) {
-							return current + 0.3;
-						}
+						return current + 0.3;
 					}
 				},
 			},
