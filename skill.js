@@ -165,7 +165,7 @@ const skills = {
 					controls.push("减体力上限并获得技能");
 				}
 				if (stolenSkills.length) {
-					controls.push("失去技能并摸牌");
+					controls.push("失去技能并令他人失去技能");
 				}
 				if (!controls.length) {
 					return;
@@ -176,7 +176,7 @@ const skills = {
 					.set("prompt", get.prompt("夺魂", target))
 					.set(
 						"prompt2",
-						`濒死角色：${get.translation(target)}。选择一项：①减体力上限并获得技能，令其回复体力至1点；②失去技能并摸牌，令其回复体力至1点。`,
+						`濒死角色：${get.translation(target)}。选择一项：①减体力上限并获得技能，令其回复体力至1点；②失去一个来源于其他角色的技能，并令一名其他角色失去一个技能直到回合结束，令其回复体力至1点。`,
 					)
 					.set("ai", () => {
 						const player2 = _status.event.player;
@@ -192,8 +192,8 @@ const skills = {
 						) {
 							return "减体力上限并获得技能";
 						}
-						if (evtControls.includes("失去技能并摸牌")) {
-							return "失去技能并摸牌";
+						if (evtControls.includes("失去技能并令他人失去技能")) {
+							return "失去技能并令他人失去技能";
 						}
 						if (evtControls.includes("减体力上限并获得技能")) {
 							return "减体力上限并获得技能";
@@ -257,7 +257,64 @@ const skills = {
 							delete player.storage.夺魂_sources[skill];
 						}
 					}
-					await player.draw(player.maxHp);
+					// ②2后半段：令一名其他角色失去一个技能直到回合结束
+					// 失效池：武将牌标注技能 ∩ 当前拥有 ∩ 非charlotte ∩ 未处于暂时失效（与止涕·失魂同口径）
+					const getBanSkills = (t) =>
+						lib.skill.夺魂.getSkills(t).filter(
+							(s) =>
+								t.hasSkill(s) &&
+								!lib.skill[s]?.charlotte &&
+								!t.isTempBanned(s),
+						);
+					const banCandidates = game.filterPlayer(
+						(t) => t !== player && getBanSkills(t).length > 0,
+					);
+					if (banCandidates.length) {
+						const banTargetResult = await player
+							.chooseTarget(
+								true,
+								"令一名其他角色失去一个技能直到回合结束",
+								(card, player2, t) =>
+									player2 !== t && getBanSkills(t).length > 0,
+							)
+							.set("ai", (t) => {
+								const player2 = _status.event.player;
+								return -get.attitude(player2, t) + Math.random();
+							})
+							.forResult();
+						if (
+							banTargetResult.bool &&
+							banTargetResult.targets.length
+						) {
+							const banTarget = banTargetResult.targets[0];
+							const banSkills = getBanSkills(banTarget);
+							const banSkillResult = await player
+								.chooseButton(
+									[
+										`令${get.translation(banTarget)}失去一个技能，直到回合结束`,
+										[banSkills, "skill"],
+									],
+									true,
+								)
+								.set("ai", (button) => {
+									const info = get.info(button.link);
+									if (info && info.ai && info.ai.combo) {
+										return 3 + Math.random();
+									}
+									return 2 + Math.random();
+								})
+								.forResult();
+							if (
+								banSkillResult.bool &&
+								banSkillResult.links &&
+								banSkillResult.links.length
+							) {
+								player.line(banTarget);
+								// tempBanSkill 默认失效至当前回合结束（phaseAfter），封锁其触发与主动使用，并自动记录暂时失效日志
+								banTarget.tempBanSkill(banSkillResult.links[0]);
+							}
+						}
+					}
 				}
 				await target.recoverTo(1);
 			}
@@ -2158,6 +2215,239 @@ const skills = {
 			},
 		},
 		skill_id: "穷兵",
+		_priority: 0,
+	},
+	"傀体": {
+		audio: "ext:noname_diy:2",
+		locked: true,
+		forced: true,
+		trigger: {
+			player: "damageEnd",
+			target: "useCardToTarget",
+		},
+		mod: {
+			// ③你的所有锦囊牌均视为【杀】（官方 extra.js nzry_longnu_2 同款写法）。
+			// 必须用 lib.card[card.name].type 判原始类型：get.type/get.name 内部会再查
+			// cardname mod，在这里调用会造成无限递归
+			cardname(card, player) {
+				if (["trick", "delay"].includes(lib.card[card.name]?.type)) {
+					return "sha";
+				}
+			},
+		},
+		logTarget(trigger, player, triggername) {
+			if (triggername === "damageEnd") {
+				return _status.currentPhase;
+			}
+			// useCardToTarget：弹泡指向牌的使用者
+			return trigger.player;
+		},
+		filter(event, player, name) {
+			if (name === "damageEnd") {
+				// ①受到伤害：需存在当前回合角色且有牌可失去
+				if (!(event.num > 0)) {
+					return false;
+				}
+				const current = _status.currentPhase;
+				return !!(current && current.isIn() && current.countCards("he") > 0);
+			}
+			// useCardToTarget：②成为其他角色使用锦囊牌的目标
+			if (!event.card) {
+				return false;
+			}
+			if (event.player === player) {
+				return false;
+			}
+			// 以使用者的视角判定类型（get.type2 会把延时锦囊也归入 trick）
+			return get.type2(event.card, event.player) === "trick";
+		},
+		async content(event, trigger, player) {
+			if (event.triggername === "damageEnd") {
+				// ①令当前回合角色失去等量张牌
+				const current = _status.currentPhase;
+				if (!current || !current.isIn()) {
+					return;
+				}
+				const num = Math.min(trigger.num, current.countCards("he"));
+				if (num <= 0) {
+					return;
+				}
+				const result = await current
+					.chooseCard("he", num, true, `傀体：请失去${get.cnNumber(num)}张牌`)
+					.set("ai", (card) => -get.value(card))
+					.forResult();
+				if (result?.bool && result.cards?.length) {
+					await current.lose(result.cards);
+					game.log(current, "因【傀体】失去了", result.cards);
+				}
+				return;
+			}
+			// ②摸X张牌（X为体力值）或获得其X张牌
+			const user = trigger.player;
+			const X = player.hp;
+			if (!(X > 0)) {
+				return;
+			}
+			let choice = "摸牌";
+			if (user.countCards("hej") > 0) {
+				const result = await player
+					.chooseControl(["摸牌", "获得其牌"])
+					.set("prompt", "傀体：请选择一项")
+					.set("choiceList", [
+						`摸${get.cnNumber(X)}张牌`,
+						`获得${get.translation(user)}区域内的${get.cnNumber(Math.min(X, user.countCards("hej")))}张牌`,
+					])
+					.set("ai", () => {
+						const me = _status.event.player;
+						const user2 = _status.event.getTrigger()?.player;
+						if (!user2) {
+							return "摸牌";
+						}
+						return get.attitude(me, user2) < 0 ? "获得其牌" : "摸牌";
+					})
+					.forResult();
+				if (result?.control) {
+					choice = result.control;
+				}
+			}
+			if (choice === "获得其牌") {
+				await player.gainPlayerCard(user, Math.min(X, user.countCards("hej")), "hej", true);
+			} else {
+				await player.draw(X);
+			}
+		},
+		skill_id: "傀体",
+		_priority: 0,
+	},
+	"百战": {
+		audio: "ext:noname_diy:2",
+		locked: true,
+		forced: true,
+		trigger: {
+			source: "damageSource",
+		},
+		logTarget: "player",
+		filter(event, player) {
+			return event.num > 0;
+		},
+		async content(event, trigger, player) {
+			// 先增加体力上限再回复，recover 内部会按 maxHp 自动封顶
+			await player.gainMaxHp(trigger.num);
+			await player.recover(trigger.num);
+		},
+		skill_id: "百战",
+		_priority: 0,
+	},
+	"不竭": {
+		audio: "ext:noname_diy:2",
+		locked: true,
+		mod: {
+			// 你使用牌无次数限制（与破军①同款写法）
+			cardUsable: () => Infinity,
+		},
+		skill_id: "不竭",
+		_priority: 0,
+	},
+	"移魂": {
+		audio: "ext:noname_diy:2",
+		locked: true,
+		forced: true,
+		trigger: {
+			global: ["roundStart", "useCardToTarget"],
+		},
+		logTarget(trigger, player, triggername) {
+			if (triggername === "useCardToTarget") {
+				return trigger.target;
+			}
+			return void 0;
+		},
+		filter(event, player, name) {
+			if (name === "roundStart") {
+				return game.hasPlayer((current) => current !== player);
+			}
+			// useCardToTarget：指定角色成为除你以外其他角色使用牌的唯一目标
+			const target = player.storage["移魂"];
+			if (!target || !target.isIn()) {
+				return false;
+			}
+			// 指定仅在本轮内有效（"直到本轮游戏结束"）：
+			// 若某轮开始时你已阵亡（无法重新指定），上一轮的指定不得跨轮生效
+			if (player.storage["移魂_round"] !== game.roundNumber) {
+				return false;
+			}
+			if (event.target !== target) {
+				return false;
+			}
+			if (event.player === target) {
+				return false;
+			}
+			if (event.player === player) {
+				return false;
+			}
+			const evt = event.getParent();
+			if (!evt || !evt.targets || evt.targets.length !== 1 || !evt.targets.includes(target)) {
+				return false;
+			}
+			// 每名"移魂"拥有者对同一次使用牌只转移一次，防止互相指定时无限循环
+			return !evt["移魂_used"]?.includes(player.playerid);
+		},
+		async content(event, trigger, player) {
+			if (event.triggername === "roundStart") {
+				// 每轮游戏开始时指定一名其他角色
+				const result = await player
+					.chooseTarget(
+						true,
+						"移魂：指定一名其他角色，当其成为其他角色使用牌的目标时，你代替其成为此牌的目标",
+						(card, player2, target) => target !== player2,
+					)
+					.set("ai", (target) => {
+						const me = _status.event.player;
+						return -get.attitude(me, target) + Math.random() * 0.5;
+					})
+					.forResult();
+				if (result?.bool && result.targets?.length) {
+					player.storage["移魂"] = result.targets[0];
+					// 轮数戳：game.roundNumber 在 roundStart 触发前已自增（content.js），
+					// 指定效果持续到本轮结束（下轮 roundStart 时被新指定覆盖或自然失效）
+					player.storage["移魂_round"] = game.roundNumber;
+					player.markSkill("移魂");
+					game.log(player, "指定了", result.targets[0], "为【移魂】的目标");
+				}
+				return;
+			}
+			// 代替该角色成为此牌的目标（参考官方流离 liuli 的改目标写法）
+			const target = player.storage["移魂"];
+			const evt = trigger.getParent();
+			if (!target || !evt?.targets || evt.targets.length !== 1 || evt.targets[0] !== target) {
+				return;
+			}
+			if (player.storage["移魂_round"] !== game.roundNumber) {
+				return;
+			}
+			evt["移魂_used"] ??= [];
+			if (evt["移魂_used"].includes(player.playerid)) {
+				return;
+			}
+			evt["移魂_used"].push(player.playerid);
+			evt.triggeredTargets2.remove(target);
+			evt.targets.remove(target);
+			evt.targets.push(player);
+			player.line(target, "thunder");
+			game.log(player, "代替", target, "成为了", trigger.card, "的目标");
+		},
+		intro: {
+			name: "移魂",
+			content(storage) {
+				if (storage && storage.isIn?.()) {
+					return "当前指定：" + get.translation(storage);
+				}
+				if (storage) {
+					return "指定目标：" + get.translation(storage) + "（已阵亡）";
+				}
+				return "尚未指定目标";
+			},
+		},
+		skill_id: "移魂",
 		_priority: 0,
 	},
 };

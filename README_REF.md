@@ -91,6 +91,7 @@ export default function () {
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
 | 应天司马懿（shen，4/4） | 戢鳞、英猷（英猷_seal/英猷_skip）、应天（觉醒技）、倾朝 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
 | 神冶（shen，4/4） | 冶武、炼刃、穷兵 | 武器栏增减经济 + 弃装备牌抉择（拿牌/伤害）+ 濒死保命 |
+| 神傀（shen，4/4） | 傀体、百战、不竭、移魂 | 傀儡机制：受击反制 + 锦囊全视为杀（mod.cardname）+ 无限用牌 + 流离式目标转移 |
 
 ---
 
@@ -263,11 +264,11 @@ export default function () {
 
 **文案：**
 > ①游戏开始时，你可以失去1点体力上限并获得一名其他角色的一个技能。
-> ②一名角色死亡时，若你：1、体力上限大于1，你可以减少1点体力上限并获得一名其他角色的一个技能；2、拥有至少1个来源于其他角色的技能，你可以失去一个来源于其他角色的技能，然后摸体力上限张牌。若如此做，你令其回复体力至1点。
+> ②一名角色死亡时，若你：1、体力上限大于1，你可以减少1点体力上限并获得一名其他角色的一个技能；2、拥有至少1个来源于其他角色的技能，你可以失去一个来源于其他角色的技能，然后令一名其他角色失去一个技能直到回合结束。若如此做，你令其回复体力至1点。
 
 **设计点：**
 1. **情况A（gameStart）**：开局主动消耗上限换技能，成长型起点。
-2. **情况B（_saveAfter）**：求桃失败后兜底救场，代价二选一——**减上限拿技能**或**丢来源技摸牌**，执行后令濒死角色回复至1点。
+2. **情况B（_saveAfter）**：求桃失败后兜底救场，代价二选一——**减上限拿技能**或**丢来源技+令一名其他角色失去一个技能直到回合结束**，执行后令濒死角色回复至1点。
 3. 上限=1 时情况A和B选项1均停用，天然安全锁。
 4. 两个触发时机共用一个技能，用 `event.triggername` 区分流程。
 
@@ -277,15 +278,16 @@ export default function () {
 - **⚠️ 不能用 `group`**：若用 `group:["夺魂_rescue"]` 分离救人逻辑，引擎会用子技能的 trigger 覆盖主技能的 trigger，导致 `gameStart` 不触发（见踩坑记录#28）。
 - **⚠️ `logSkill` 不执行效果**：`player.logSkill(skillName)` 仅显示技能名气泡动画，不会执行任何游戏效果。不能用 `logSkill` + `return` 代替实际的技能 content 逻辑（见踩坑记录#29）。
 - **情况A流程**：`chooseBool("是否要失去1点体力上限，并获得一名其他角色的一个技能？")` → `loseMaxHp` → `chooseTarget` → `chooseSkill`。
-- **情况B流程**：`chooseControl(["减体力上限并获得技能", "失去技能并摸牌", "cancel2"])` → 对应效果 → `recoverTo(1)`。
+- **情况B流程**：`chooseControl(["减体力上限并获得技能", "失去技能并令他人失去技能", "cancel2"])` → 对应效果 → `recoverTo(1)`。选项2：`chooseButton` 选要失去的来源技 → `removeSkill` + `delete 夺魂_sources` → 有可封目标时 `chooseTarget` → `chooseButton` 选其一个非 `charlotte` 技 → `banTarget.tempBanSkill(技)`。
 - **复活**：`await target.recoverTo(1)`（在 `_saveAfter` 内拉回 1 血即可阻止后续 die）。
+- **"失去技能直到回合结束"（选项2后半段）**：`banTarget.tempBanSkill(技能名)`——引擎内置，默认失效至**当前回合结束**（expire `{global:["phaseAfter","phaseBeforeStart"]}`，`relatedTrigger` 只映射 `phaseAny`，`phaseAfter` 精确匹配回合结束而非各子阶段 After）。封锁触发（`lib.filter.filterTrigger` 检查 `temp_ban_` storage，经 `game.expandSkills` 连 group 成员一起封锁）与主动使用（enable 枚举按 `temp_ban_技能名` 精确匹配）；非破坏性（不触发 onremove，storage/标记/扩展牌保留，技能仍显示）；自动 log "XX的技能【YY】暂时失效了"；幂等（已失效再调用直接返回）。⚠️ 局限：技能的 `mod` 被动修正走 `getModableSkills`→`getSkills`（只过滤 `disabledSkills`/`skill_blocker`，不查 `temp_ban_`），被封技能的被动数值/牌名修正仍生效。选择池：`getSkills(target)`（武将牌标注）∩ `target.hasSkill` ∩ 非 `charlotte`（与止涕·失魂同口径）∩ `!isTempBanned`（已失效再选无意义）。无有效目标时跳过封技、救场照常（"如此做"由失去来源技即已成立）。
 - **技能来源追踪**：`player.storage.夺魂_sources = {技能名: 来源角色}`；偷技时在 `chooseSkill` 内写入，失去时 `delete`。
 - **辅助函数**（挂在技能对象上，供夺魂/止涕共用）：
   - `getSkills(target)`：取角色技能（兼容 name/name1/name2 主公技槽）
   - `getStolenSkills(player)`：`Object.keys(map).filter(s => map[s]!==player && player.hasSkill(s))` —— 当前拥有的"来源技能"
-- **AI**：情况A 时 `maxHp>2` 才发动；情况B 时对濒死角色好感度 ≤0 则取消，上限>2 优先扣上限，否则丢来源技能（AI 优先丢 `info.charlotte` 的鸡肋技）。
+- **AI**：情况A 时 `maxHp>2` 才发动；情况B 时对濒死角色好感度 ≤0 则取消，上限>2 优先扣上限，否则丢来源技能（AI 优先丢 `info.charlotte` 的鸡肋技）；封技目标选好感度最低的其他角色。
 
-**关键 API：** `forced` / `locked` / `chooseBool` / `chooseControl` / `chooseTarget` / `chooseButton([... , "skill"])` / `loseMaxHp` / `recoverTo` / `draw` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `event.triggername` / `get.prompt2` / `get.attitude` / `game.filterPlayer` / `_status.event.getTrigger()`。
+**关键 API：** `forced` / `locked` / `chooseBool` / `chooseControl` / `chooseTarget` / `chooseButton([... , "skill"])` / `loseMaxHp` / `recoverTo` / `addSkills` / `removeSkill` / `hasSkill` / `tempBanSkill` / `isTempBanned` / `storage` / `line` / `event.triggername` / `get.prompt2` / `get.attitude` / `game.filterPlayer` / `_status.event.getTrigger()`。
 
 ---
 
@@ -573,6 +575,88 @@ export default function () {
 
 ---
 
+## 2.7 神傀
+
+### 2.7.0 傀体
+
+**文案：**
+> 锁定技。①当你受到伤害时，你令当前回合角色失去等量张牌。②当你成为其他角色使用锦囊牌的目标时，你摸X张牌（X为你的体力值）或获得其X张牌。③你的所有锦囊牌均视为【杀】。
+
+**设计点：**
+1. 傀儡的"代价转移"机制：受到的伤害转化为当前回合角色的手牌损耗（受击威慑，敌方打傀儡亏牌）。
+2. ②把"被锦囊指定"变成收益（摸体力值张牌或夺取使用者的牌），配合③使得傀儡几乎不惧锦囊。
+3. ③锦囊牌全视为【杀】，配合【不竭】无次数限制，手牌里的锦囊全部变成输出；配合【百战】每次造成伤害都在涨上限回体力，滚雪球核心。
+
+**实现要点：**
+- **多时机共用一个技能**：`trigger:{player:"damageEnd", target:"useCardToTarget"}`，filter 用第三个参数 `name` 区分、content 用 `event.triggername` 分支（踩坑#8/#23）。
+- **①时机用 `player:"damageEnd"`**（官方奸雄/反馈同款时机）；"当前回合角色"取 `_status.currentPhase`，filter 里校验其存活且有牌可失去（避免弹泡后空结算）；"失去"用 `chooseCard` + `target.lose(cards)`（lose 默认去向为弃牌堆，与"弃置"语义区分）。
+- **②"锦囊牌"判定**：`get.type2(event.card, event.player) === "trick"`——get.type2 会把延时锦囊（type "delay"）也归入 trick，故无需单列；第二参数传使用者以尊重其视角的牌名转化。
+- **②二选一**：锁定技自动触发，content 内 `chooseControl` 询问"摸牌/获得其牌"（对方区域内无牌时跳过询问直接摸牌）；获得用 `gainPlayerCard(user, min(X, 其区域内牌数), "hej", true)`，张数手动 clamp 防 selectButton 越界。
+- **③锦囊转杀（重点，官方 extra.js nzry_longnu_2 同款写法）**：`mod:{ cardname(card, player){ if (["trick","delay"].includes(lib.card[card.name]?.type)) return "sha"; } }`。⚠️ 必须读 `lib.card[card.name].type` 原始类型判断——`get.type`/`get.type2` 内部会再次调用 `get.name` 查 cardname mod，在 mod 里调用会无限递归（见踩坑#45）。mod 只影响"牌名查询层"（get.name/get.type/使用/打出/响应/AI 评估全部跟随），无需 trigger 侧替换牌对象。
+- **弹泡**：不手动 logSkill——引擎在触发时自动 `logSkill`（content.js createTrigger 内，`info.popup != false && !info.direct` 时），`logTarget` 写成函数按 triggername 返回弹泡指向（damageEnd → `_status.currentPhase`；useCardToTarget → `trigger.player` 即牌的使用者）。手动在 content 里 logSkill 会造成双重弹泡+双重语音。
+
+**关键 API：** `damageEnd` / `useCardToTarget`（target 位） / `mod.cardname` / `get.type2(card, player)` / `_status.currentPhase` / `chooseCard(position, num, true, prompt)` / `player.lose(cards)`（默认进弃牌堆） / `gainPlayerCard(target, num, position, true)` / `chooseControl` / `logTarget(trigger, player, triggername)` 函数式弹泡指向 / `get.cnNumber`。
+
+---
+
+### 2.7.1 百战
+
+**文案：**
+> 锁定技。当你造成伤害时，你增加伤害值点体力上限并回复等量体力。
+
+**设计点：**
+1. 造成伤害即成长：伤害值 = 体力上限增量 = 回复量，攻防一体。
+2. 与傀体③+不竭联动：锦囊全是杀且无次数限制 → 高频伤害 → 上限与体力滚雪球。
+3. 与傀体②联动：X 为体力值，体力越高被锦囊指定收益越大。
+
+**实现要点：**
+- **触发**：`source:"damageSource"` + `filter: event.num > 0`（与止涕/冶武的造成伤害时机一致）。
+- **顺序**：先 `gainMaxHp(num)` 再 `recover(num)`——gainMaxHp 内容只做 `maxHp += num` 不加当前体力（content.js 已验证），先加上限才能给回复腾出空间；recover 内部按 `maxHp - hp` 自动封顶，满体力时静默无效。
+- **弹泡**：`logTarget: "player"`（damageSource 事件里 `event.player` 为受伤者），引擎自动 logSkill。
+
+**关键 API：** `source:"damageSource"` / `gainMaxHp(num)`（不加当前体力）/ `recover(num)`（自动封顶）/ `logTarget` 字符串式（取 `trigger.player`）。
+
+---
+
+### 2.7.2 不竭
+
+**文案：**
+> 锁定技。你使用牌无次数限制。
+
+**设计点：**
+1. 纯常驻 mod 技，无触发时机；与傀体③组合后"锦囊杀"也不受次数限制。
+
+**实现要点：**
+- **写法**：`mod:{ cardUsable: () => Infinity }`（与破军①同款）。纯 mod 技不需要 `forced`，保留 `locked: true` 显示锁定技标识即可。
+
+**关键 API：** `mod.cardUsable`。
+
+---
+
+### 2.7.3 移魂
+
+**文案：**
+> 锁定技。每轮游戏开始时，你指定一名其他角色，然后直到本轮游戏结束，当该角色成为除你以外其他角色使用牌的唯一目标时，你代替该角色成为此牌的目标。
+
+**设计点：**
+1. 每轮换目标的强制"替身"机制：指定角色成为**唯一目标**且使用者**非你**时，此牌转移到你身上——傀儡本体吸收。
+2. 两条限制的用意：①"除你以外其他角色"排除你自己使用牌指定其的情况，避免自己的【杀】转到自己头上；②"唯一目标"把 AOE（南蛮入寇/万箭齐发/桃园结义）和多目标牌（如方天画戟多指【杀】）排除在外——既贴合文案，也天然规避了"你已在目标列表中，转移后被结算两次"的问题。
+3. 与傀体②强联动：单目标锦囊（含乐不思蜀等延时锦囊）被转移到自己身上时，useCardToTarget 会对"你"再次触发，傀体②照常摸牌（引擎循环自动实现，无需额外代码）。
+4. 与傀体①联动：转移过来的【杀】造成伤害后，当前回合角色失去等量张牌，形成"打傀儡指定的目标 = 亏牌"的威慑闭环。
+
+**实现要点：**
+- **触发**：`global:["roundStart","useCardToTarget"]`。roundStart 为每轮开始的全场时机（content.js 在回合初始化且 isRound 时触发），filter 用 `name` 区分。
+- **指定存储**：`player.storage["移魂"] = target` + 轮数戳 `player.storage["移魂_round"] = game.roundNumber`，`markSkill("移魂")` 刷新标记；`intro.content(storage)` 读取 storage（Player 对象）显示"当前指定：XXX"，目标死亡时显示"（已阵亡）"。
+- **"直到本轮游戏结束"的落地（轮数戳）**：`game.roundNumber` 在 roundStart 触发**之前**已同步自增（content.js 回合初始化步骤内 `game.roundNumber++` → `await event.trigger("roundStart")`），故指定时戳下当前轮数，filter/content 校验 `storage["移魂_round"] === game.roundNumber`。这同时堵住一个隐藏边界：若某轮开始时你已阵亡（触发不生效、无法重新指定），中途复活后上一轮的指定不会跨轮生效；正常每轮 roundStart 会用新指定覆盖轮数戳，指定目标换人后旧目标立即失效（storage 被覆盖，从始至终只存一个目标）。
+- **filter 的四道闸**（evt = `event.getParent()` 即 useCard 事件）：①`event.target === 指定角色`；②`event.player !== 指定角色`（该角色自己用牌不算）；③`event.player !== player`（"除你以外"）；④`evt.targets.length === 1 && evt.targets.includes(target)`（"唯一目标"）。
+- **改目标（重点，参考官方流离 liuli）**：content 里 `evt.triggeredTargets2.remove(目标); evt.targets.remove(目标); evt.targets.push(player);`。useCard 的多目标循环全部读活跃的 `evt.targets`（getTriggerTarget 按 targets 与 triggeredTargets 的差集逐个发时机、效果按 `targets[num]` 取），故中途改 targets 即生效；被移除者不再进入后续时机与结算。因 filter 已保证"唯一目标且使用者非你"，此时你必然不在 targets 中，push 无需去重。
+- **⚠️ 防死循环守卫**：两个"移魂"拥有者互相指定对方且互相成为目标时，仍会触发"转移 → 新目标再触发 → 再转移"的乒乓循环。守卫：转移前检查并在 useCard 事件上写 `evt["移魂_used"]`（playerid 数组），每名拥有者对同一次使用牌只转移一次（filter 与 content 双重校验）。
+- **弹泡**：logTarget 函数——useCardToTarget 分支返回 `trigger.target`（被指定者），roundStart 分支返回 undefined（指定选择发生在 content 内，弹泡不指向目标，靠 game.log 记录）。
+
+**关键 API：** `roundStart` / `useCardToTarget`（global 位，`event.target` 为当前目标、`event.player` 为使用者）/ `trigger.getParent()`（useCard 事件）/ `evt.targets` / `evt.triggeredTargets2` / `storage` 存 Player 对象 / `markSkill` / `intro.content`。
+
+---
+
 ---
 
 # 3 踩坑记录
@@ -621,3 +705,6 @@ export default function () {
 42. **⚠️ `targetInRange` mod 返回值语义**：`targetInRange(card, player, target)` mod 中，返回 `true` = 目标在范围内（无距离限制）；返回 `false` = **强制判定为目标超出距离**（不可使用）；返回 `undefined`（不返回）= 不修改，按正常距离计算。⚠️ 常见错误：`return zhi.some(c => get.suit(c) === get.suit(card))`——当花色不匹配时 `.some()` 返回 `false`，导致该花色的牌**永远无法使用**（被强制判定为超出距离）。正确写法：`if (zhi.some(...)) return true;`，不匹配时隐式返回 `undefined`，让引擎正常计算距离（应天司马懿·倾朝）。
 43. **⚠️ 察觉"自己失去装备/牌"须参考官方枭姬（xiaoji, standard.js）的时机集合**（神冶·冶武，2026-09 更正）：① 他人夺走自己的牌（义贤 `player.gain(cards,"give")`、定州 `player.gain(cards,"give",target)`）产生的是 **gain 事件**，其 content 会对每个被抢者 `owner.lose(...)`（type:"gain"）产生子 lose——但此类**带 type 的转移子 lose 不触发 loseAfter**，引擎统一在转移事件自身的 After 时机通知，所以监听 `global:["loseAfter","loseAsyncAfter"]` 抓不到抢牌，**必须监听 `global:"gainAfter"`**（gain 事件的 `getl(player)` 会聚合其下子 lose，能取到被抢者失去的牌）。② 完整失去感知集合：`player:"loseAfter"`（自己弃置/被拆等独立 lose）+ `global:["equipAfter","addJudgeAfter","gainAfter","loseAsyncAfter","addToExpansionAfter"]`。③ **失去统计只认 `evt.es`（装备区失去）**：使用装备时新手牌从手牌失去记录在 hs 不算失去装备，否则会与 useCard 时机重复触发（“使用装备摸两次”）；按需在 filter 判断 `evt.player === player && evt.es?.length`。
 44. **⚠️ 主动技 content 按目标逐个执行 + chooseButton backup 常见坑**（神冶·炼刃）：① 非 `multitarget` 的 useSkill 型主动技（含 chooseButton 的 backup 技能）content 会**对每个目标各执行一次**（每轮 `event.target` 单数依次指向所选目标、`event.num` 递增，多目标时 targets 先按座次排序并自动高亮/画线）。**切勿在 content 里遍历 `event.targets` 结算**——否则每人会被重复结算 N 次（曾出现"每个目标连续受 X 点伤害"）。正确做法：content 只处理单数 `event.target`（每个目标恰好结算一次），一次性副作用（如弃牌）放 `if (event.num === 0)` 内只执行一次。② **不要在 backup 型主技能的 precontent 里覆盖 `event.result.skill` 为主容器技能名**：主技能是 chooseButton 容器、本身没有 content，引擎应自动走 `技能_backup`（backup() 返回对象自带 content）；若强行把 result.skill 设回主技能名，useSkill 会取到 undefined content → ContentCompiler 报 `Cannot read properties of undefined (reading 'compiled')`。③ backup 型技能引擎**不自动弃牌**，需在 backup 返回对象设 `discard:false` 并在 content 内手动 `player.discard`。
+45. **"你的X牌均视为Y牌"用 `mod.cardname` 实现，且 mod 内禁止调用 get.type/get.name**（神傀·傀体③）：① 官方先例：extra.js `nzry_longnu_2`（所有锦囊牌视为雷杀）、`wushen`（红牌视为杀）、library/skill.js `aozhan`（鏖战规则技，桃视为杀/闪）。写法：`mod:{ cardname(card, player){ if (条件) return "新牌名"; } }`——该 mod 挂在 `get.name(card, player)` 查询层（game.checkMod），使用/打出/响应/AI 评估/显示全部自动跟随，**无需**在 trigger 侧替换牌对象（aozhan 的 trigger 部分是其"杀/闪二选一"交互所需的，普通单向转化不需要）。② ⚠️ **mod 内必须用 `lib.card[card.name]?.type` 读原始类型判断，不能调 `get.type(card)`/`get.type2(card)`**——get.type 内部会再次调用 get.name 查 cardname mod，造成无限递归。③ 判定"锦囊牌"（含延时锦囊）用 `["trick","delay"].includes(lib.card[card.name]?.type)`；判定"非延时锦囊"用 `get.type2(card, player) === "trick"`（get.type2 把 delay 归入 trick）——在 mod **外**判断他人牌的类型时用后者。④ mod 只对"牌主/查询传入的 player"生效：他人查你的牌（get.name(card, 你)）也会得到转化后的名字；无 player 参数且牌不在手牌区时（如判定区牌被 get.name(card) 裸查）不生效。
+46. **触发类技能不要在 content 里手动 logSkill**（神傀）：引擎在触发结算时已自动调用 `player.logSkill`（content.js createTrigger 内：`info.popup != false && !info.direct` 时），弹泡指向由 `logTarget`（字符串取 `trigger[key]`，或函数 `(trigger, player, triggername) => ...`）或 cost 的 `result.targets` 决定，需要"当前回合角色"这类目标时用 logTarget 函数返回 `_status.currentPhase`。content 里再手动 logSkill 属冗余（若导致双重调用则双重弹泡+语音）。另注：本扩展旧技能（魂契/止涕）content 里的 `player.logSkill(event.skill, ...)` 因 `event.skill` 在 content 中为 undefined（踩坑#30）而是**静默无效调用**（logSkill 内 `lib.translate[name2]` 检查挡住 undefined），实际弹泡全部来自引擎自动调用——新技能无需模仿这行写法。
+47. **"令一名角色失去技能直到回合结束"用 `tempBanSkill(skill)`**（夺魂②）：引擎内置（Player.tempBanSkill），默认 expire `{global:["phaseAfter","phaseBeforeStart"]}` = **当前回合结束时解除**（`lib.relatedTrigger` 只映射 `phaseAny`，`phaseAfter` 不匹配任何相关触发名，精确对应回合结束事件）。封锁范围：①触发结算——`lib.filter.filterTrigger` 尾段检查 storage 中 `temp_ban_*`，经 `game.expandSkills([被封技能])` 匹配（**连 group 成员一起封锁**）；②主动使用——enable 技能枚举逐技按 `temp_ban_技能名` 精确匹配（group 成员的 enable 不受影响）。特性：非破坏性（不触发 onremove，storage/标记/扩展牌全保留，技能仍显示在武将牌上）；自动 log "XX的技能【YY】暂时失效了"（`log:false` 可关）；幂等（`isTempBanned` 为真再调用直接返回）。⚠️ **局限**：技能的 `mod`（被动修正：cardname/cardUsable/maxHandcard 等）走 `getModableSkills`→`getSkills()`——`getSkills` 只过滤 `disabledSkills`/`skill_blocker`，**不查 temp_ban**，所以被封技能的被动修正仍生效。若需连 mod 一起封死，改用 `disableSkill(唯一禁用者, 技能)`（会递归禁用 group 成员，且首次禁用时若技能同时有 `ondisable`+`onremove` 会执行其破坏性清理）+ `when({global:["phaseAfter","phaseBeforeStart"]})` 里 `enableSkill(禁用者)` 恢复（参考 `awakenSkill` 的失去语义），代价是自行管理恢复时机与唯一 disabler。

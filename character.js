@@ -57,6 +57,14 @@ const characters = {
 		skills: ["冶武", "炼刃", "穷兵"],
 		img: "extension/noname_diy/神冶.jpg",
 	},
+	"神傀": {
+		sex: "male",
+		group: "shen",
+		hp: 4,
+		maxHp: 4,
+		hujia: 0,
+		skills: ["傀体", "百战", "不竭", "移魂"],
+	},
 };
 
 export default characters;
