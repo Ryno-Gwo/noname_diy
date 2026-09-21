@@ -63,7 +63,7 @@ const characters = {
 		hp: 4,
 		maxHp: 4,
 		hujia: 0,
-		skills: ["傀体", "百战", "不竭", "移魂"],
+		skills: ["傀体", "百战", "移魂"],
 	},
 };
 
