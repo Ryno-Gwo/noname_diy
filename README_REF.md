@@ -652,6 +652,75 @@ export default function () {
 
 ---
 
+## 2.8 神貂蝉
+
+### 2.8.0 魅魔
+
+**文案：**
+> 锁定技。①游戏开始时，你获得体力上限枚"魅"。②拥有"魅"的角色：1、不可于你的回合外使用【桃】以外的牌指定你为目标；2、使用牌指定拥有"魅"的角色为唯一目标时，你令其获得目标角色的一枚"魅"；3、使用牌指定不拥有"魅"的角色为目标时，你摸一张牌；4、受到伤害时，其可以移去至多X枚"魅"（X为其已损失体力值），然后摸X张牌并回复X点体力。
+
+**设计点：**
+1. "魅"是全场流通的"咒印"资源：开局自带体力上限枚，经魅心/魅祸扩散给其他角色，也可经②2 在"魅"持有者之间流转。所有条目以"拥有'魅'的角色"为作用域——包括貂蝉自己。
+2. ②1 是"越传魅越安全"的防御闭环，且限制的是**【桃】以外的全部牌**：拿到"魅"的敌人在貂蝉回合外无法以【桃】以外的任何牌指定她（帷幕 weimu 式 `mod.targetEnabled`）。以"回合外"为界是刻意的折中：自己的回合内不受限，貂蝉可正常自指用牌（装备/闪电等），拥有魅的角色也能在她的回合内指定她——此时②2 生效，指定她要从她身上抽走一枚"魅"，形成"回合内敢打貂蝉 = 交出过牌路费之外的额外代价"。**【桃】单独放行**：回合外濒死可被喂桃，避免"入魅即无法救治"的死角。
+3. ②2 让"魅"在持有者之间流转：有魅的角色以另一名有魅角色为**唯一目标**用牌，后者被抽走一枚魅、前者收入囊中——貂蝉自己指定有魅角色同样成立（"其"含自己，从目标身上吸一枚回自己）。"唯一目标"限定是为消歧：多目标锦囊（南蛮/万箭/五谷等）指定多名有魅角色时无法确定"目标角色"指向，故不触发。与魅祸联动：视为【杀】天然单目标，互指双方都是有魅者，每次互指会互相转移魅（此消彼长）。
+4. ②3 是貂蝉的过牌引擎：用牌指定**无"魅"角色**才摸牌（打"圈外"角色有过牌，打已入魅角色没有——把"处理已入魅角色"的收益让给②2 的转移与魅祸的移魅分支）。
+5. ②4 让"魅"成为全场持有者的"血债偿还"资源：受伤后可移去至多 X 枚（X=已损失体力值）摸 X 摸回 X 血——移满恰好回满状态。貂蝉魅祸的移魅分支因此有了明确的战略价值：拆掉受伤者的回血燃料。
+
+**实现要点：**
+- **四时机共用一个技能（全 global 位）**：`trigger:{global:["gameStart","useCard","damageEnd","useCardToTarget"]}`，filter 用第三个参数 `name` 区分、content 用 `event.triggername` 分支（踩坑#8/#23）。⚠️ **useCardToTarget 必须挂 global 位而非 target 位**：target 位只在"技能拥有者自己是目标"时被引擎询问——②2 的作用对象是任意魅持有者之间的指定（貂蝉自己是使用者时她不是目标），挂 target 位会导致"她用牌指定有魅角色"永不触发（2026-09 实测踩坑，同移魂的 global 位用法，global 位下 `event.target` 为当前目标）。
+- **"魅"的存储**：纯计数标记（非扩展区牌），用 `addMark/removeMark/countMark` 实现，载体是子技能 `魅魔_mark`（charlotte+sub+sourceSkill，`mark:true, marktext:"魅", intro:{name:"魅", name2:"魅", content:"mark"}`，参考祸心 huoxin 的 marktext 写法）。`addMark` 会自动 `markSkill` 挂显示；`gainMei(target, ±n)` 帮助函数统一加/减，减到 0 时 `removeSkill` 清理。
+- **①`gameStart` 时机**（魂契同款）：`gainMei(player, player.maxHp)`。
+- **②1 mod**：`mod.targetEnabled(card, user, target)`——帷幕式写法，参数序为 (card, 牌的使用者, 技能拥有者)；`card 存在 && user.countMark("魅魔_mark") > 0 && _status.currentPhase != target && get.name(card, user) != "tao"` 时返回 `false`（踩坑#42）。回合判定用 `_status.currentPhase`：她的回合内不拦截（含她自己回合内被他人指定与自指用牌）。**【桃】放行是必需的**：⚠️ 求桃询问的 `chooseToUse.filterTarget`（content.js 求桃段）**会直接查 `targetEnabled` mod**（`lib.filter.cardSavable` 本身不查，但外层目标过滤查）——若无【桃】豁免，回合外濒死将无法被喂桃。`get.name(card, user)` 走 cardname mod，视为的【桃】同样放行。
+- **②2 时机 `global:"useCardToTarget"`**（2026-09 由 target 位修正，见上）：per-目标时机；filter 四道闸：使用者有魅、目标有魅、目标≠使用者（自指转移无意义）、**唯一目标**——`event.getParent()` 取 useCard 事件判 `evt.targets.length === 1`（多目标锦囊/多指【杀】不触发，消歧"目标角色"指向；判定方式同移魂，移魂的四道闸之一）。content 为强制转移：`gainMei(target,-1)` + `gainMei(user,+1)`。⚠️ 貂蝉自己的回合内，其他有魅角色可以以她为唯一目标用牌——此时目标=貂蝉，转移的是她自己的"魅"。弹泡指向使用者（logTarget 返回 `trigger.player`）。
+- **②3 时机 `global:"useCard"`**：整次使用只触发一次（不用逐目标的 useCardToTarget，避免多目标牌重复摸牌）；filter 要求使用者有魅且 `event.targets.some(t => t.countMark("魅魔_mark") <= 0)`（任一目标无魅即摸）。**注**：魅祸的视为【杀】互指"魅"持有者，不满足"目标无魅"，不触发②3；但视为【杀】天然单目标，互指双方各触发一次②2（互相转移魅）。
+- **②4 时机 `global:"damageEnd"`**：filter 判 `event.num > 0` 且持有者 `isDamaged()`（X≥1 才有询问意义）；X = `maxHp - hp`（结算时取值），`chooseNumbers` 选移去数量（`{bool, numbers}`，processAI 返回 `[x]` 全额，不选即取消——天然合并"是否发动"与"选数量"两步，规避踩坑#16 的 [0,X] 问题）。移去后 `draw(num)` + `recover(num)`（recover 自动封顶，移满 X 枚恰好补满体力）。
+- **弹泡**：不手动 logSkill，引擎自动弹泡；`logTarget` 函数式——useCardToTarget/damageEnd 分支返回 `trigger.player`，gameStart/useCard 分支无特定指向。
+
+**关键 API：** `mod.targetEnabled`（帷幕式） / `_status.currentPhase`（当前回合角色，回合内外判定） / `lib.filter.cardSavable` 不查 targetEnabled（求桃不被②1封锁） / `addMark` / `removeMark` / `countMark`（计数标记三件套） / `chooseNumbers(prompt, [{prompt,min,max}])`（返回 `{bool, numbers}`） / `processAI` 返回 `[num]` / `global:"damageEnd"` + `player.isDamaged()` / `recover`（自动封顶）。
+
+---
+
+### 2.8.1 魅心
+
+**文案：**
+> 当你成为其他角色使用牌的目标时，若该角色的性别包含男性，你可以交给其一张牌并取消之，然后其获得一枚"魅"。
+
+**设计点：**
+1. 与魅魔②1/②2 联动的"赎身"机制：无魅的男性指定貂蝉（②1 拦不住无魅者），可用一张手牌换取取消；代价是对方入魅——此后其在貂蝉回合外**任何牌**都无法指定她（②1），在她的回合内指定有魅角色则要被②2 抽走一枚魅。防御与传魅一体。
+2. 文案不限牌的类型：从【杀】到乐不思蜀皆可取消，但只有男性使用者——貂蝉的"魅力"有性别指向性。
+
+**实现要点：**
+- **触发**：`trigger:{target:"useCardToTarget"}`，`event.player` 为使用者，须 `event.player !== player` 且 `event.player.hasSex("male")`（`hasSex` 是引擎 Player 方法，兼容单性别/数组性别，参考永健/一将成名技的用法）。
+- **cost/content 分离**：cost 里 `chooseBool`（是否发动）+ `chooseCard("h",1,true,...)`（选交出的手牌，forced 选牌），`event.result = {bool:true, cards}`；content 里 `player.give(event.cards, user)`（交给 = 手牌转移，giveAuto 动画）→ `trigger.getParent().excluded.add(player)` 取消对自己的目标（疑城_negate 式，踩坑#17，娴辅同款）→ `gainMei(user, 1)`。
+- **取消语义**：`excluded.add` 是"此牌对我无效"而非整张作废——其他目标照常结算；魅魔②2 同为 useCardToTarget 时机，魅心先行取消后②2 的转移照常结算（②2 只判使用者与目标的魅状态，excluded 不回溯该时机）。
+- **AI**：cost 的 chooseBool AI 判定"使用者敌对且此牌对自己效果为负"（`get.attitude < 0 && get.effect < 0`）；ai.effect.target 将男性角色的不利牌威胁下调（[1, 0.4]）。
+- **弹泡**：`logTarget:"player"`（自动指向使用者）。
+
+**关键 API：** `player.hasSex("male")` / `chooseBool` + forced `chooseCard` / `player.give(cards, target)` / `trigger.getParent().excluded.add(player)`（踩坑#17）/ `get.effect(target, card, source, viewer)` / `logTarget` 字符串式。
+
+---
+
+### 2.8.2 魅祸
+
+**文案：**
+> 出牌阶段，你可以令两名拥有"魅"的其他角色各自视为对对方使用一张无距离限制的【杀】，然后若：1、没有【杀】造成伤害，你与这些角色各摸一张牌并各获得一枚"魅"；2、有【杀】造成了伤害，你移去受伤角色的一枚"魅"，然后你与其各摸一张牌。
+
+**设计点：**
+1. 魅的"武器化"：把两个入魅角色变成互斗的傀儡（参考离线祸心 huoxin 的双目标强制对决结构），貂蝉隔岸观火。
+2. 两个分支都是貂蝉净赚：无伤分支全场补魅+自己过牌（补充②1 的防御面与②3 的过牌面）；有伤分支拆掉受伤者的保命"魅"，便于后续魅祸/魅心继续收割。
+3. 视为使用的【杀】互指"魅"持有者，**不再触发**魅魔②3（2026-09 改版后②3 只对"指定无魅角色"摸牌；旧版会触发，为当时的刻意设计）。
+
+**实现要点：**
+- **主动技结构**：`enable:"phaseUse", usable:1, selectTarget:2, multitarget:true, multiline:true`，`filterTarget` 判"其他角色且有魅标记"；`filter` 用 `game.countPlayer` 判场上至少两名有魅的其他角色。
+- **视为使用**：`user.useCard(get.autoViewAs({name:"sha", isCard:true}), victim, false)`（仙定 xianding 式写法）——直接以目标结算的 useCard 天然无距离限制、无次数限制、不耗实体牌；第一个【杀】可能致死，循环内逐个校验 `isIn()`。
+- **伤害判定**：useCard 前记录 `game.getGlobalHistory("everything", evt => evt.name == "damage").length` 基线，两次 useCard 后 `slice(pre)` 取新增伤害事件，filter 条件：`evt.num > 0 && evt.card?.name === "sha" && targets.includes(evt.source)`。⚠️ 全局历史记录只有 `cardMove/custom/useCard/changeHp/everything` 五个键，**没有 `damage` 键**（伤害历史只在玩家个人 actionHistory 上）——直接 `getGlobalHistory("damage")` 返回 undefined，须经 `"everything"` 键按事件名过滤（zhanfa.js 同款写法）。不用玩家 `getHistory("damage")`：伤害可能因转移/改源落在第三者身上，全局历史更稳。
+- **分支①**：貂蝉与存活目标各摸一张、各得一枚魅。**分支②的多目标解释**：文案单数"受伤角色"在两杀皆命中时按"每名受伤角色"处理——每名受伤角色移去一枚魅并各摸一张，**貂蝉只摸一张**（"你与其各摸一张牌"按集合读）。
+- **AI**：`result.target` 返回 `-get.attitude(player, target)`，双敌对目标优先。
+
+**关键 API：** `enable:"phaseUse"` + `selectTarget:2` + `multitarget` / `get.autoViewAs({name:"sha", isCard:true})` / `user.useCard(vcard, target, false)`（视为使用，无距离限制） / `game.getGlobalHistory("damage")` 全局伤害历史 / `Set` 去重受伤角色 / `player.line(targets, "thunder")`。
+
+---
+
 ---
 
 # 3 踩坑记录
@@ -707,3 +776,4 @@ export default function () {
 49. **"直到其下一个回合结束"的时效写法**（止涕）：`addTempSkill(skill, {player:"phaseEnd"})`/`tempBanSkill(skill, {player:"phaseEnd"})` 的语义是"其**下一次** phaseEnd 时解除"——若效果在其自己回合内生效，会在**本回合**结束时提前解除。官方（dcsbzuojun）对"直到其下个回合结束"的标准写法是 when 钩子 + filter 跳过当前回合：`target.when({player:"phaseEnd"}, false).filter(evt => evt != event.getParent("phase")).assign({firstDo:true}).step(cleanup).finish()`。搭配 `tempBanSkill(skill, "forever")`（只置 `temp_ban_` 标记与日志、不挂自动解除）使用。`when(...)` 的 skill 自带 `triggered` 一次性守卫（触发一次后不再执行）；`instantlyAdd=false` 时必须调用 `.finish()` 才会 addSkill。
 50. **dying 事件对已濒死角色幂等**（夺魂②）：damage 事件在 hp≤0 时创建新的 dying 事件，但其第一步（content.ts）检查 `player.isDying() || player.hp > 0` 即 finish——对已处于 `_status.dying` 中的角色（如 `_saveAfter` 中的濒死者）再次造成伤害**不会**嵌套新一轮求桃、也不会提前 die（`isDying()` = `_status.dying.includes(this) && hp <= 0 && isAlive()`，player.js）。随后 `recoverTo(1)` 经 changeHp 检测到 `_status.dying.includes(player) && player.hp > 0`，将其移出 `_status.dying` 并 finish 待决的 `_save`/`dying` 事件，救回照常成立。因此夺魂②的伤害目标可以合法选到濒死角色本身。
 51. **⚠️ `temp_ban` 封不死的技能类别——"封了但技能照用"**（止涕，2026-09 实测）：`tempBanSkill` 的 `temp_ban_` 标记在引擎里只有两个检查点——filterTrigger（library/index.js 触发排布）与 filterEnable（game/check.js 主动使用枚举）。**mod 被动修正（`getModableSkills`→`getSkills` 只过滤 `disabledSkills`/`skill_blocker`）、skillTag 响应类（`hasSkillTag` 同样走 `getSkills`）、以及依赖 `hasSkill` 判定的 `global:` 子技（如归訫的归訫_put，其 filter 找 `hasSkill("归訫")` 的持有者）都不受 temp_ban 影响**——表现为"弹了封技询问、选了技能、失效日志也打了，但技能照常生效"。强封方案（#47 已提示，止涕已改用）：`target.disableSkill(唯一禁用者, 技能)` 挂 `disabledSkills`，`getSkills`/`hasSkill`/`hasSkillTag`/mod 全部随之失效，`enableSkill(禁用者)` 解除；递归封 group 成员；首次禁用仅当技能同时有 `ondisable`+`onremove` 才执行破坏性清理（本扩展技能均无 `ondisable`）。解除时机仍用 #49 的 when 钩子，step 内改调 `player2.enableSkill("止涕")`。
+52. **⚠️ 全局历史没有 `damage` 键**（魅祸，2026-09 实测）：`game.getGlobalHistory(key)` 直接查 `_status.globalHistory[最新记录][key]`，而全局记录只初始化了 **`cardMove`/`custom`/`useCard`/`changeHp`/`everything` 五个键**（content.js phase 轮换处），`damage` 只存在于玩家个人 `actionHistory`（`player.getHistory("damage")`）——传 `"damage"` 会拿到 undefined，对其 `.length`/`.filter` 直接 TypeError。要按事件名全局检索用 `game.getGlobalHistory("everything", evt => evt.name == "damage")`（zhanfa.js 同款），需要"基线差"统计时对过滤结果 `.length`/`.slice()` 即可。

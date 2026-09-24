@@ -65,6 +65,14 @@ const characters = {
 		hujia: 0,
 		skills: ["傀体", "百战", "移魂"],
 	},
+	"神貂蝉": {
+		sex: "female",
+		group: "shen",
+		hp: 3,
+		maxHp: 3,
+		hujia: 0,
+		skills: ["魅魔", "魅心", "魅祸"],
+	},
 };
 
 export default characters;
