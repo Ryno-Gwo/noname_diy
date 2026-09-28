@@ -2397,35 +2397,13 @@ const skills = {
 		locked: true,
 		forced: true,
 		trigger: {
-			// ⚠️ useCardToTarget 必须挂 global 位：target 位只在"貂蝉自己是目标"时触发，
-			// 而②2 的作用对象是任意"魅"持有者之间的指定（她自己是使用者时引擎不会询问 target 位的她）
-			// ——同移魂的 global 位用法，event.target 为当前目标
-			global: ["gameStart", "useCard", "damageEnd", "useCardToTarget"],
+			// ①挂 global "useCard"（每张牌一次性时机，trigger 即 useCard 事件本身，targets 已确定，
+			// 踩坑#40）——"指定唯一目标"是用牌级语义，一次性时机天然每张牌至多结算一次
+			// （useCardToTarget 是逐目标时机，需自行限定）；global 位全场询问，貂蝉自己的用牌同样触发
+			global: ["useCard", "dying"],
 		},
-		logTarget(trigger, player, triggername) {
-			if (triggername === "useCardToTarget" || triggername === "damageEnd") {
-				return trigger.player;
-			}
-			return void 0;
-		},
-		// ②1拥有"魅"的角色不可于你的回合外使用【桃】以外的牌指定你为目标
-		// （帷幕式 targetEnabled mod：参数为(card, 牌的使用者, 技能拥有者)，本技能拥有者即"你"，
-		// 返回 false 强制判定为不可指定，返回 undefined 不干预——踩坑#42）
-		// 回合判定用 _status.currentPhase：当前回合角色为你时不限制（自己回合内可被指定、可自指用牌）；
-		// 【桃】（含视为的桃）放行——回合外濒死可被喂桃（另：求桃流程走 cardSavable 不查 targetEnabled，双保险）
-		mod: {
-			targetEnabled(card, user, target) {
-				if (
-					card &&
-					user &&
-					user.countMark("魅魔_mark") > 0 &&
-					_status.currentPhase != target &&
-					get.name(card, user) != "tao"
-				) {
-					return false;
-				}
-			},
-		},
+		// 弹泡指向：①获"魅"的用牌者、②濒死者——两事件的弹泡主体都是 trigger.player
+		logTarget: "player",
 		gainMei(target, num = 1) {
 			// "魅"计数标记：addMark 会自动 markSkill 挂上"魅魔_mark"的标记显示
 			if (num > 0) {
@@ -2439,82 +2417,51 @@ const skills = {
 			}
 		},
 		filter(event, player, name) {
-			if (name === "gameStart") {
-				// ①游戏开始时，你获得体力上限枚"魅"
-				return true;
-			}
 			if (name === "useCard") {
-				// ②3拥有"魅"的角色使用牌指定不拥有"魅"的角色为目标时，你摸一张牌
-				// （不排除你自己：你自己也"拥有魅"；目标不含魅才摸，多目标牌混指时任一目标无魅即摸）
 				const user = event.player;
-				if (!user || user.countMark("魅魔_mark") <= 0) {
+				if (!user) {
 					return false;
 				}
-				return !!(event.targets && event.targets.some((t) => t.countMark("魅魔_mark") <= 0));
+				// 范围=你和拥有"魅"的角色（貂蝉始终在列，其余使用者需持"魅"）
+				if (user !== player && user.countMark("魅魔_mark") <= 0) {
+					return false;
+				}
+				// ①：非虚拟牌（非虚拟=有实体牌基础，转化牌不算虚拟，纯视为牌如魅祸的虚拟【杀】不算
+				// ——get.is.virtualCard；排除虚拟牌堵魅祸炸 N 枚魅又全额回充的循环）
+				if (get.is.virtualCard(event.card)) {
+					return false;
+				}
+				// 指定唯一目标（目标不限；无目标牌不算"指定"）
+				return event.targets?.length === 1;
 			}
-			if (name === "useCardToTarget") {
-				// ②2拥有"魅"的使用者以拥有"魅"的角色为唯一目标使用牌时，你令其获得目标角色的一枚"魅"
-				// （唯一目标：多目标锦囊/多指【杀】不触发，否则无法确定"目标角色"指向——参考移魂的唯一目标判定；
-				// 使用者=目标时转移无意义，跳过）
-				const user = event.player;
-				if (!user || user.countMark("魅魔_mark") <= 0) {
-					return false;
-				}
-				if (!event.target || event.target === user) {
-					return false;
-				}
-				const evt = event.getParent();
-				if (!evt || !evt.targets || evt.targets.length !== 1) {
-					return false;
-				}
-				return event.target.countMark("魅魔_mark") > 0;
-			}
-			if (name === "damageEnd") {
-				// ②4拥有"魅"的角色受到伤害时
-				return !!(event.player && event.num > 0 && event.player.countMark("魅魔_mark") > 0 && event.player.isDamaged());
+			if (name === "dying") {
+				// ②有"魅"的角色进入濒死时（无魅可移则无事发生，不触发、不弹泡，正常进入求桃/死亡流程；
+				// 貂蝉自己无魅濒死同样不触发）
+				const dying = event.player;
+				return !!(dying && dying.isIn() && dying.countMark("魅魔_mark") > 0);
 			}
 			return false;
 		},
 		async content(event, trigger, player) {
-			if (event.triggername === "gameStart") {
-				lib.skill.魅魔.gainMei(player, player.maxHp);
-				return;
-			}
 			if (event.triggername === "useCard") {
-				// ②3：你摸一张牌（目标均为"魅"持有者时不摸——魅祸的视为【杀】互指"魅"持有者，不再触发②3）
+				// ①：该用牌者获得一枚"魅"，然后你摸一张牌
+				const user = trigger.player;
+				lib.skill.魅魔.gainMei(user, 1);
+				game.log(user, "获得了一枚\"魅\"");
 				await player.draw();
 				return;
 			}
-			if (event.triggername === "useCardToTarget") {
-				// ②2：你令其获得目标角色的一枚"魅"（从目标身上转移一枚给使用者）
-				const user = trigger.player;
-				const target = trigger.target;
-				lib.skill.魅魔.gainMei(target, -1);
-				lib.skill.魅魔.gainMei(user, 1);
-				game.log(user, "获得了", target, "的一枚\"魅\"");
-				return;
-			}
-			// ②4：受到伤害时，其可以移去至多X枚"魅"（X为其已损失体力值），然后摸X张牌并回复X点体力
-			// （damageEnd 时机，X 在结算时按 maxHp-hp 取值；回复自动封顶，移满X枚恰好补满体力）
+			// ②：移去其所有"魅"并令其恢复等量点体力；濒死者为貂蝉自己时她额外摸等量张牌
+			// （recover 上限为体力上限不会溢出；伤害透支时回复后 hp 仍≤0，引擎继续正常求桃/死亡流程）
 			const target = trigger.player;
-			const x = Math.max(0, target.maxHp - target.hp);
-			const { bool, numbers } = await target
-				.chooseNumbers(`魅魔：请选择移去几枚"魅"（至多${get.cnNumber(x)}枚；摸等量张牌并回复等量体力）`, [
-					{
-						prompt: "请选择要移去的\"魅\"数",
-						min: 1,
-						max: x,
-					},
-				])
-				.set("processAI", () => [x])
-				.forResult();
-			if (!bool || !numbers?.length) {
-				return;
+			const num = target.countMark("魅魔_mark");
+			if (num > 0) {
+				lib.skill.魅魔.gainMei(target, -num);
+				await target.recover(num);
+				if (target === player) {
+					await player.draw(num);
+				}
 			}
-			const num = numbers[0];
-			lib.skill.魅魔.gainMei(target, -num);
-			await target.draw(num);
-			await target.recover(num);
 		},
 		skill_id: "魅魔",
 		_priority: 0,
@@ -2538,62 +2485,109 @@ const skills = {
 		trigger: { target: "useCardToTarget" },
 		logTarget: "player",
 		filter(event, player) {
-			// 当你成为其他角色使用牌的目标时
+			// 当你成为其他角色使用牌的目标时（target 位时机；content 中以 excluded 取消目标——踩坑#17）；
+			// 两项至少一项可选：①交给该角色一张牌——文案未限定区域，"一张牌"=手牌区/装备区/木牛流马
+			// 三处（位置码 "hes"：木牛流马牌带 glows 混在手牌节点，"h" 排除、"s" 仅选它）；
+			// ②移去该角色一枚"魅"——需其持魅
 			if (!event.player || event.player === player) {
 				return false;
 			}
-			// 该角色的性别包含男性（hasSex 兼容单性别与数组性别）
-			if (!event.player.hasSex("male")) {
-				return false;
-			}
-			if (!event.card) {
-				return false;
-			}
-			// 需要一张可交给的手牌
-			return player.countCards("h") > 0;
+			const user = event.player;
+			return player.countCards("hes") > 0 || user.countMark("魅魔_mark") > 0;
 		},
 		async cost(event, trigger, player) {
 			const user = trigger.player;
+			const canGive = player.countCards("hes") > 0;
+			const canRemove = user.countMark("魅魔_mark") > 0;
+			// 是否发动：此牌对自己为负面价值才值得取消（友方回复等正面牌不取消）
 			const boolResult = await player
 				.chooseBool(
 					get.prompt(event.skill, user),
-					`交给其一张手牌并取消之（${get.translation(trigger.card)}对你无效），然后其获得一枚\"魅\"`,
+					canGive && canRemove
+						? "选择一项取消之"
+						: canRemove
+							? `移去${get.translation(user)}一枚\"魅\"并取消之`
+							: `将一张牌交给${get.translation(user)}，令其获得一枚\"魅\"并取消之`,
 				)
 				.set("ai", () => {
+					const evt = _status.event.getTrigger();
 					const me = _status.event.player;
-					const user2 = _status.event.getTrigger()?.player;
-					if (!user2) {
+					if (!evt) {
 						return 0;
 					}
-					return get.attitude(me, user2) < 0 && get.effect(me, trigger.card, user2, me) < 0 ? 1 : 0;
+					return get.effect(me, evt.card, evt.player, me) < 0 ? 1 : 0;
 				})
 				.forResult();
 			if (!boolResult.bool) {
 				return;
 			}
-			const cardResult = await player
-				.chooseCard("h", 1, true, `魅心：选择交给${get.translation(user)}的手牌`)
-				.set("ai", (card) => get.value(card))
-				.forResult();
-			if (cardResult.bool && cardResult.cards?.length) {
-				event.result = { bool: true, cards: cardResult.cards };
+			// 选哪一项：两项皆可选时 chooseControl（result.index：0=交牌，1=移魅），否则唯一项
+			let choice = "give";
+			if (canGive && canRemove) {
+				const ctrlResult = await player
+					.chooseControl()
+					.set("prompt", "魅心：请选择一项")
+					.set("choiceList", [
+						`交给${get.translation(user)}一张牌，令其获得一枚\"魅\"并取消之`,
+						`移去${get.translation(user)}一枚\"魅\"并取消之`,
+					])
+					.set("ai", () => {
+						const evt = _status.event.getTrigger();
+						const me = _status.event.player;
+						if (!evt) {
+							return 1;
+						}
+						// 非友方→移魅（免费且削减其"魅"储备）；友方→交牌（还其一张牌并喂"魅"）
+						return get.attitude(me, evt.player) > 0 ? 0 : 1;
+					})
+					.forResult();
+				choice = ctrlResult.index === 1 ? "remove" : "give";
+			} else if (canRemove) {
+				choice = "remove";
 			}
+			if (choice === "give") {
+				// 交给牌："一张牌"=手牌区/装备区/木牛流马（位置码 "hes"）；交付对象即牌的使用者，
+				// 无需另选目标；低价值牌优先送出（装备牌 get.value 高，AI 自然不会误交身上的装备）
+				const cardResult = await player
+					.chooseCard("hes", 1, true, `魅心：选择交给${get.translation(user)}的牌`)
+					.set("ai", (card) => 1 / Math.max(0.1, get.value(card)))
+					.forResult();
+				if (cardResult.bool && cardResult.cards?.length) {
+					event.result = { bool: true, cards: cardResult.cards, cost_data: "give" };
+				}
+				return;
+			}
+			event.result = { bool: true, cost_data: "remove" };
 		},
 		async content(event, trigger, player) {
 			const user = trigger.player;
-			await player.give(event.cards, user);
-			game.log(player, "将", event.cards, "交给了", user);
-			// "取消之"：令此牌不再以自己为目标（疑城_negate 式 excluded 写法，踩坑#17）
+			// 取消：per-target 触发事件与 useCard 事件按引用共享 excluded——踩坑#17
 			trigger.getParent().excluded.add(player);
-			game.log(trigger.card, "因【魅心】对", player, "无效了");
-			lib.skill.魅魔.gainMei(user, 1);
+			game.log(trigger.card, "对", player, "无效了");
+			if (event.cost_data === "give") {
+				// ①：交给一张牌，令其获得一枚"魅"
+				await player.give(event.cards, user);
+				game.log(player, "将", event.cards, "交给了", user);
+				lib.skill.魅魔.gainMei(user, 1);
+				game.log(user, "获得了一枚\"魅\"");
+			} else {
+				// ②：移去其一枚"魅"
+				lib.skill.魅魔.gainMei(user, -1);
+				game.log(player, "移去了", user, "的一枚\"魅\"");
+			}
 		},
 		ai: {
 			effect: {
 				target(card, player, target, current) {
-					// 男性角色的一张不利牌可被一张手牌抵消，威胁下降
-					if (player && target && player !== target && player.hasSex("male") && current < 0) {
-						return [1, 0.4];
+					if (player && target && player !== target && get.tag(card, "damage") && current < 0) {
+						// 用牌者有"魅"：她可免费移魅取消，威胁大降
+						if (player.countMark("魅魔_mark") > 0) {
+							return [1, 0];
+						}
+						// 仅可交牌取消（手牌/装备/木牛流马内任一，有代价），威胁略降
+						if (target.countCards("hes") > 0) {
+							return [1, 0.4];
+						}
 					}
 				},
 			},
@@ -2606,77 +2600,62 @@ const skills = {
 		enable: "phaseUse",
 		usable: 1,
 		filter(event, player) {
-			return (
-				game.countPlayer(
-					(current) => current !== player && current.countMark("魅魔_mark") > 0,
-				) >= 2
-			);
+			// 存在有"魅"的角色（含貂蝉自己），且其之外还存在另一名角色可作受害者
+			return game.hasPlayer((current) => {
+				if (current.countMark("魅魔_mark") <= 0) {
+					return false;
+				}
+				return game.hasPlayer((c) => c !== player && c !== current);
+			});
 		},
 		filterTarget(card, player, target) {
-			return target !== player && target.countMark("魅魔_mark") > 0;
+			if (ui.selected.targets.length) {
+				// 第二个目标：受害者（另一名其他角色：非貂蝉、非"魅"来源者）
+				return target !== player && !ui.selected.targets.includes(target);
+			}
+			// 第一个目标：有"魅"的角色（含貂蝉自己，用自身的"魅"开火）
+			return target.countMark("魅魔_mark") > 0;
 		},
 		selectTarget: 2,
 		multitarget: true,
 		multiline: true,
 		async content(event, trigger, player) {
-			const targets = event.targets.slice(0);
-			player.line(targets, "thunder");
-			// 记录伤害历史基线，用于判定两个视为【杀】是否造成过伤害
-			// ⚠️ 全局历史没有 "damage" 键（只有 cardMove/custom/useCard/changeHp/everything），
-			// 需经 "everything" 键按事件名过滤（zhanfa.js 同款写法）
-			const pre = game.getGlobalHistory("everything", (evt) => evt.name == "damage").length;
-			// 各自视为对对方使用一张无距离限制的【杀】：
-			// useCard 直接指定目标结算，天然无距离限制；第一个【杀】可能致死，逐个校验存活
-			for (let i = 0; i < 2; i++) {
-				const user = targets[i];
-				const victim = targets[1 - i];
-				if (!user.isIn() || !victim.isIn()) {
-					continue;
-				}
-				await user.useCard(get.autoViewAs({ name: "sha", isCard: true }), victim, false);
-			}
-			const damages = game
-				.getGlobalHistory("everything", (evt) => evt.name == "damage")
-				.slice(pre)
-				.filter(
-					(evt) =>
-						evt.num > 0 &&
-						evt.card &&
-						evt.card.name === "sha" &&
-						targets.includes(evt.source),
-				);
-			if (!damages.length) {
-				// ①没有【杀】造成伤害：你与这些角色各摸一张牌并各获得一枚"魅"
-				await player.draw();
-				lib.skill.魅魔.gainMei(player, 1);
-				for (const target of targets) {
-					if (!target.isIn()) {
-						continue;
-					}
-					await target.draw();
-					lib.skill.魅魔.gainMei(target, 1);
-				}
+			const user = event.targets[0];
+			const victim = event.targets[1];
+			if (!user.isIn() || !victim.isIn()) {
 				return;
 			}
-			// ②有【杀】造成了伤害：你移去受伤角色的一枚"魅"，然后你与其各摸一张牌
-			// （"你"只摸一张；每名受伤角色各移去一枚"魅"并各摸一张）
-			const injured = new Set(damages.map((evt) => evt.player));
-			for (const target of injured) {
-				if (target.isIn() && target.countMark("魅魔_mark") > 0) {
-					lib.skill.魅魔.gainMei(target, -1);
-				}
+			player.line([user, victim], "thunder");
+			// 移去其所有"魅"
+			const num = user.countMark("魅魔_mark");
+			if (num <= 0) {
+				return;
 			}
-			await player.draw();
-			for (const target of injured) {
-				if (target.isIn()) {
-					await target.draw();
+			lib.skill.魅魔.gainMei(user, -num);
+			game.log(player, "移去了", user, "的全部\"魅\"");
+			// 其视为对受害者使用等量张无视距离和次数限制的【杀】
+			// （useCard 直接指定目标结算，天然无距离和次数限制；中途死亡/离场则终止）
+			for (let i = 0; i < num; i++) {
+				if (!user.isIn() || !victim.isIn()) {
+					break;
 				}
+				await user.useCard(get.autoViewAs({ name: "sha", isCard: true }), victim, false);
 			}
 		},
 		ai: {
 			order: 6,
 			result: {
 				target(player, target) {
+					if (!ui.selected.targets.length) {
+						// 第一个目标（"魅"来源者，含自己）：自己最优（亲自开火不拆人），
+						// 敌方次之（拆光其"魅"+借刀），友方权衡（借刀打人 vs 拆光其保命"魅"）
+						const num = target.countMark("魅魔_mark");
+						if (target === player) {
+							return 5 + num;
+						}
+						const att = get.attitude(player, target);
+						return att > 0 ? att + num - 3 : num + 2;
+					}
 					return -get.attitude(player, target);
 				},
 			},

@@ -657,69 +657,61 @@ export default function () {
 ### 2.8.0 魅魔
 
 **文案：**
-> 锁定技。①游戏开始时，你获得体力上限枚"魅"。②拥有"魅"的角色：1、不可于你的回合外使用【桃】以外的牌指定你为目标；2、使用牌指定拥有"魅"的角色为唯一目标时，你令其获得目标角色的一枚"魅"；3、使用牌指定不拥有"魅"的角色为目标时，你摸一张牌；4、受到伤害时，其可以移去至多X枚"魅"（X为其已损失体力值），然后摸X张牌并回复X点体力。
+> 锁定技。你和拥有"魅"的角色：1、使用非虚拟牌指定唯一目标时，获得一枚"魅"，然后你摸一张牌；2、进入濒死状态时，你移去其所有"魅"并令其恢复等量点体力，若该角色为你，你额外摸等量张牌。
 
 **设计点：**
-1. "魅"是全场流通的"咒印"资源：开局自带体力上限枚，经魅心/魅祸扩散给其他角色，也可经②2 在"魅"持有者之间流转。所有条目以"拥有'魅'的角色"为作用域——包括貂蝉自己。
-2. ②1 是"越传魅越安全"的防御闭环，且限制的是**【桃】以外的全部牌**：拿到"魅"的敌人在貂蝉回合外无法以【桃】以外的任何牌指定她（帷幕 weimu 式 `mod.targetEnabled`）。以"回合外"为界是刻意的折中：自己的回合内不受限，貂蝉可正常自指用牌（装备/闪电等），拥有魅的角色也能在她的回合内指定她——此时②2 生效，指定她要从她身上抽走一枚"魅"，形成"回合内敢打貂蝉 = 交出过牌路费之外的额外代价"。**【桃】单独放行**：回合外濒死可被喂桃，避免"入魅即无法救治"的死角。
-3. ②2 让"魅"在持有者之间流转：有魅的角色以另一名有魅角色为**唯一目标**用牌，后者被抽走一枚魅、前者收入囊中——貂蝉自己指定有魅角色同样成立（"其"含自己，从目标身上吸一枚回自己）。"唯一目标"限定是为消歧：多目标锦囊（南蛮/万箭/五谷等）指定多名有魅角色时无法确定"目标角色"指向，故不触发。与魅祸联动：视为【杀】天然单目标，互指双方都是有魅者，每次互指会互相转移魅（此消彼长）。
-4. ②3 是貂蝉的过牌引擎：用牌指定**无"魅"角色**才摸牌（打"圈外"角色有过牌，打已入魅角色没有——把"处理已入魅角色"的收益让给②2 的转移与魅祸的移魅分支）。
-5. ②4 让"魅"成为全场持有者的"血债偿还"资源：受伤后可移去至多 X 枚（X=已损失体力值）摸 X 摸回 X 血——移满恰好回满状态。貂蝉魅祸的移魅分支因此有了明确的战略价值：拆掉受伤者的回血燃料。
+1. 作用范围是"你和拥有'魅'的角色"：**貂蝉始终在列**（即使自己没有"魅"），其余角色须持"魅"才受①②约束——①②中"用牌/濒死"的主语是范围内角色，"你"（摸牌方）恒为貂蝉。（V3.x 的"缴税"式防御①已随本版整体移除，她的防御职责移交魅心。）
+2. ①"魅"的积累引擎：**获"魅"的是用牌者**（主语承前省略，非目标）——范围内角色使用**非虚拟**牌指定**唯一目标**（目标不限）时，用牌者获一枚"魅"、貂蝉摸一张。"非虚拟"=有实体牌基础（转化牌用实体牌当别的牌，不算虚拟）；排除虚拟牌是为了堵魅祸的回充循环——魅祸的视为【杀】若触发①，炸 N 枚魅又全额回充（净耗 0）。
+3. ②濒死续命：有"魅"的角色濒死时移去（销毁）其所有"魅"并恢复等量点体力；**濒死者为貂蝉自己时她额外摸等量张牌**——她的魅既是②的续命数值也是魅祸的爆发资源，濒死自回血同时补牌（回复量以魅数为准：魅少或伤害透支时照样进入求桃/死亡）。
 
 **实现要点：**
-- **四时机共用一个技能（全 global 位）**：`trigger:{global:["gameStart","useCard","damageEnd","useCardToTarget"]}`，filter 用第三个参数 `name` 区分、content 用 `event.triggername` 分支（踩坑#8/#23）。⚠️ **useCardToTarget 必须挂 global 位而非 target 位**：target 位只在"技能拥有者自己是目标"时被引擎询问——②2 的作用对象是任意魅持有者之间的指定（貂蝉自己是使用者时她不是目标），挂 target 位会导致"她用牌指定有魅角色"永不触发（2026-09 实测踩坑，同移魂的 global 位用法，global 位下 `event.target` 为当前目标）。
-- **"魅"的存储**：纯计数标记（非扩展区牌），用 `addMark/removeMark/countMark` 实现，载体是子技能 `魅魔_mark`（charlotte+sub+sourceSkill，`mark:true, marktext:"魅", intro:{name:"魅", name2:"魅", content:"mark"}`，参考祸心 huoxin 的 marktext 写法）。`addMark` 会自动 `markSkill` 挂显示；`gainMei(target, ±n)` 帮助函数统一加/减，减到 0 时 `removeSkill` 清理。
-- **①`gameStart` 时机**（魂契同款）：`gainMei(player, player.maxHp)`。
-- **②1 mod**：`mod.targetEnabled(card, user, target)`——帷幕式写法，参数序为 (card, 牌的使用者, 技能拥有者)；`card 存在 && user.countMark("魅魔_mark") > 0 && _status.currentPhase != target && get.name(card, user) != "tao"` 时返回 `false`（踩坑#42）。回合判定用 `_status.currentPhase`：她的回合内不拦截（含她自己回合内被他人指定与自指用牌）。**【桃】放行是必需的**：⚠️ 求桃询问的 `chooseToUse.filterTarget`（content.js 求桃段）**会直接查 `targetEnabled` mod**（`lib.filter.cardSavable` 本身不查，但外层目标过滤查）——若无【桃】豁免，回合外濒死将无法被喂桃。`get.name(card, user)` 走 cardname mod，视为的【桃】同样放行。
-- **②2 时机 `global:"useCardToTarget"`**（2026-09 由 target 位修正，见上）：per-目标时机；filter 四道闸：使用者有魅、目标有魅、目标≠使用者（自指转移无意义）、**唯一目标**——`event.getParent()` 取 useCard 事件判 `evt.targets.length === 1`（多目标锦囊/多指【杀】不触发，消歧"目标角色"指向；判定方式同移魂，移魂的四道闸之一）。content 为强制转移：`gainMei(target,-1)` + `gainMei(user,+1)`。⚠️ 貂蝉自己的回合内，其他有魅角色可以以她为唯一目标用牌——此时目标=貂蝉，转移的是她自己的"魅"。弹泡指向使用者（logTarget 返回 `trigger.player`）。
-- **②3 时机 `global:"useCard"`**：整次使用只触发一次（不用逐目标的 useCardToTarget，避免多目标牌重复摸牌）；filter 要求使用者有魅且 `event.targets.some(t => t.countMark("魅魔_mark") <= 0)`（任一目标无魅即摸）。**注**：魅祸的视为【杀】互指"魅"持有者，不满足"目标无魅"，不触发②3；但视为【杀】天然单目标，互指双方各触发一次②2（互相转移魅）。
-- **②4 时机 `global:"damageEnd"`**：filter 判 `event.num > 0` 且持有者 `isDamaged()`（X≥1 才有询问意义）；X = `maxHp - hp`（结算时取值），`chooseNumbers` 选移去数量（`{bool, numbers}`，processAI 返回 `[x]` 全额，不选即取消——天然合并"是否发动"与"选数量"两步，规避踩坑#16 的 [0,X] 问题）。移去后 `draw(num)` + `recover(num)`（recover 自动封顶，移满 X 枚恰好补满体力）。
-- **弹泡**：不手动 logSkill，引擎自动弹泡；`logTarget` 函数式——useCardToTarget/damageEnd 分支返回 `trigger.player`，gameStart/useCard 分支无特定指向。
+- **两效果共用一个技能（全 global 位）**：`trigger:{global:["useCard","dying"]}`，filter 用第三个参数 `name` 区分、content 用 `event.triggername` 分支（踩坑#8/#23）。①挂 global `"useCard"`（每张牌一次性时机，trigger 即 useCard 事件本身，`targets` 已确定，踩坑#40）而非 useCardToTarget（逐目标时机）——"指定唯一目标"是用牌级语义，一次性时机每张牌至多结算一次；global 位全场询问，貂蝉自己的用牌同样触发。
+- **"魅"的存储**：纯计数标记（非扩展区牌），用 `addMark/removeMark/countMark` 实现，载体是子技能 `魅魔_mark`（charlotte+sub+sourceSkill，`mark:true, marktext:"魅", intro:{name:"魅", name2:"魅", content:"mark"}`）。`addMark` 会自动 `markSkill` 挂显示；`gainMei(target, ±n)` 帮助函数统一加/减，减到 0 时 `removeSkill` 清理。
+- **① filter/content**：范围（`user === player || user.countMark("魅魔_mark") > 0`）+ 非虚拟（`!get.is.virtualCard(event.card)`。`get.is.virtualCard(card)`，get/is.js：无 `cards` 数组或为空即虚拟——魅祸 `get.autoViewAs({name:"sha", isCard:true})` 无 `.cards` 判虚拟 ✓；转化/实体使用有 `.cards` 判非虚拟 ✓）+ 唯一目标（`event.targets?.length === 1`，目标不限；无目标牌不算"指定"）；content：`gainMei(trigger.player,1)` + `player.draw()`。
+- **② filter/content**：filter 判 `dying.isIn() && dying.countMark("魅魔_mark") > 0`——**无魅不触发**（无事发生的锁定技触发只会白弹泡；貂蝉无魅濒死即正常死亡）。content：`num = countMark`；`gainMei(target,-num)`（销毁）→ `target.recover(num)`（recover 上限为体力上限）→ `target === player` 时 `player.draw(num)` 额外摸——dying 时机先于濒死求桃询问，回复后 hp>0 引擎自动跳过求桃（参见踩坑#50 的 dying/rescue 机制）；⚠️ 若伤害透支（如 hp=-3 而魅仅 1），回复后 hp 仍≤0，引擎继续正常求桃/死亡流程。
+- **弹泡**：不手动 logSkill，引擎自动弹泡；`logTarget:"player"` 字符串式——①获魅的用牌者、②濒死者，两事件的弹泡主体都是 `trigger.player`。（旧版 `ai.effect.target` 威慑随"缴税"①移除而删除。）
 
-**关键 API：** `mod.targetEnabled`（帷幕式） / `_status.currentPhase`（当前回合角色，回合内外判定） / `lib.filter.cardSavable` 不查 targetEnabled（求桃不被②1封锁） / `addMark` / `removeMark` / `countMark`（计数标记三件套） / `chooseNumbers(prompt, [{prompt,min,max}])`（返回 `{bool, numbers}`） / `processAI` 返回 `[num]` / `global:"damageEnd"` + `player.isDamaged()` / `recover`（自动封顶）。
+**关键 API：** `global:"useCard"`（每张牌一次性时机，`trigger` 即 useCard 事件，`targets` 已确定，踩坑#40） / `global:"dying"`（濒死者为 `event.player`） / `get.is.virtualCard`（非虚拟判定） / `recover(num)`（上限为体力上限） / `addMark` / `removeMark` / `countMark`（计数标记三件套）。
 
 ---
 
 ### 2.8.1 魅心
 
 **文案：**
-> 当你成为其他角色使用牌的目标时，若该角色的性别包含男性，你可以交给其一张牌并取消之，然后其获得一枚"魅"。
+> 当你成为其他角色使用牌的目标时，你可以选择一项：1、交给该角色一张牌，令其获得一枚"魅"并取消之；2、移去该角色一枚"魅"并取消之。
 
 **设计点：**
-1. 与魅魔②1/②2 联动的"赎身"机制：无魅的男性指定貂蝉（②1 拦不住无魅者），可用一张手牌换取取消；代价是对方入魅——此后其在貂蝉回合外**任何牌**都无法指定她（②1），在她的回合内指定有魅角色则要被②2 抽走一枚魅。防御与传魅一体。
-2. 文案不限牌的类型：从【杀】到乐不思蜀皆可取消，但只有男性使用者——貂蝉的"魅力"有性别指向性。
+1. 纯防御取消技，不再按用牌者性别分流（V3.x 的性别双分支已废弃）：两项都以"取消之"收尾——**①破财免灾**：送一张牌（文案未限定区域，"一张牌"=手牌区/装备区/木牛流马三处）并喂对方一枚"魅"；**②移魅免灾**：削对方一枚"魅"，免费。对方无"魅"且自己三处皆无牌时无法发动。
+2. 与魅魔联动：①喂出的"魅"给对方魅魔①的资格（其用牌让貂蝉摸牌）与②濒死续命/魅祸弹药——对敌是双刃（喂资源 vs 保命），对友是回赠（如队友被借刀逼出的【杀】指向自己时，可还一张牌取消并喂魅）。
+3. 两项皆可时玩家自选；AI 按态度分流——非友方移魅（免费且削其储备），友方交牌（还牌+喂魅）。
 
 **实现要点：**
-- **触发**：`trigger:{target:"useCardToTarget"}`，`event.player` 为使用者，须 `event.player !== player` 且 `event.player.hasSex("male")`（`hasSex` 是引擎 Player 方法，兼容单性别/数组性别，参考永健/一将成名技的用法）。
-- **cost/content 分离**：cost 里 `chooseBool`（是否发动）+ `chooseCard("h",1,true,...)`（选交出的手牌，forced 选牌），`event.result = {bool:true, cards}`；content 里 `player.give(event.cards, user)`（交给 = 手牌转移，giveAuto 动画）→ `trigger.getParent().excluded.add(player)` 取消对自己的目标（疑城_negate 式，踩坑#17，娴辅同款）→ `gainMei(user, 1)`。
-- **取消语义**：`excluded.add` 是"此牌对我无效"而非整张作废——其他目标照常结算；魅魔②2 同为 useCardToTarget 时机，魅心先行取消后②2 的转移照常结算（②2 只判使用者与目标的魅状态，excluded 不回溯该时机）。
-- **AI**：cost 的 chooseBool AI 判定"使用者敌对且此牌对自己效果为负"（`get.attitude < 0 && get.effect < 0`）；ai.effect.target 将男性角色的不利牌威胁下调（[1, 0.4]）。
-- **弹泡**：`logTarget:"player"`（自动指向使用者）。
+- **触发**：`trigger:{target:"useCardToTarget"}`（本技能语义即"你成为目标"，target 位正确）；`logTarget:"player"` 弹泡指向用牌者。filter：两项至少一项可选——`player.countCards("hes") > 0 || user.countMark("魅魔_mark") > 0`。⚠️ **区域规则**：文案"一张牌"未限定区域时=手牌区/装备区/木牛流马三处，位置码用 `"hes"`（木牛流马牌带 `glows` 混在手牌节点里，`"h"` 排除、`"s"` 仅选它，官方技能同款，如族战定 `position:"hes"`）；显式写"手牌"才是 `"h"`，写"区域内"才是 `"hej"`。
+- **cost 三段**：先 `chooseBool` 是否发动（`get.effect(me, evt.card, evt.player, me) < 0` 才取消，友方回复等正面牌不取消）→ 两项皆可选时 `chooseControl().set("choiceList",[...])` 选一项（`result.index`：0=交牌、1=移魅，见踩坑#2 chooseControl 结果无 bool）→ 选"交牌"时 `chooseCard("hes", 1, true, ...)`（低价值优先；装备牌 `get.value` 高，AI 自然不会误交身上的装备）。选项经 `event.result.cost_data` 传给 content（踩坑#1：cost 的选项不自动传 content）。（chooseCardTarget 合并选择版已随改版弃用，其 filter 签名 `(card, player, target)` 教训保留在踩坑#53。）
+- **content**：先 `trigger.getParent().excluded.add(player)` 取消（踩坑#17，仅令此牌对貂蝉无效），再按 `event.cost_data` 分支——交牌：`player.give(event.cards, user)` → `gainMei(user, 1)`；移魅：`gainMei(user, -1)`。
+- **AI**：ai.effect.target 对带 damage 标签的牌下调威胁——用牌者持魅 [1, 0]（她可免费移魅取消）、仅可交手牌取消 [1, 0.4]。
 
-**关键 API：** `player.hasSex("male")` / `chooseBool` + forced `chooseCard` / `player.give(cards, target)` / `trigger.getParent().excluded.add(player)`（踩坑#17）/ `get.effect(target, card, source, viewer)` / `logTarget` 字符串式。
+**关键 API：** target 位 `useCardToTarget` / `chooseControl().set("choiceList",[])`（`result.index` 取选项，踩坑#2） / `cost_data`（cost→content 传自定义数据，踩坑#1） / `trigger.getParent().excluded.add`（取消目标，踩坑#17） / `player.give(cards, target)` / `lib.skill.魅魔.gainMei`。
 
 ---
 
 ### 2.8.2 魅祸
 
 **文案：**
-> 出牌阶段，你可以令两名拥有"魅"的其他角色各自视为对对方使用一张无距离限制的【杀】，然后若：1、没有【杀】造成伤害，你与这些角色各摸一张牌并各获得一枚"魅"；2、有【杀】造成了伤害，你移去受伤角色的一枚"魅"，然后你与其各摸一张牌。
+> 出牌阶段限一次，你可以移去一名角色的所有"魅"，然后令其视为对你指定的另一名其他角色使用等量张无视距离和次数限制的【杀】。
 
 **设计点：**
-1. 魅的"武器化"：把两个入魅角色变成互斗的傀儡（参考离线祸心 huoxin 的双目标强制对决结构），貂蝉隔岸观火。
-2. 两个分支都是貂蝉净赚：无伤分支全场补魅+自己过牌（补充②1 的防御面与②3 的过牌面）；有伤分支拆掉受伤者的保命"魅"，便于后续魅祸/魅心继续收割。
-3. 视为使用的【杀】互指"魅"持有者，**不再触发**魅魔②3（2026-09 改版后②3 只对"指定无魅角色"摸牌；旧版会触发，为当时的刻意设计）。
+1. "魅"的引爆器：选中一名有"魅"的角色（**含貂蝉自己**），移去其全部"魅"，令其视为对指定受害者使用等量张【杀】——攒的魅一次性变成爆发；拆敌方全魅则同时将其逐出魅魔范围（此后其用牌不再获魅、貂蝉不再因之摸牌）并断其②濒死续命。
+2. **出牌阶段限一次**（V2 的无限使用会让"杀有魅貂蝉→貂蝉摸牌→再发动"无限循环，必须限次）。
+3. 受害者是"另一名其他角色"：既非貂蝉、也非魅来源者；被拆光魅的受害者不再受魅魔②保护，可能真死。
 
 **实现要点：**
-- **主动技结构**：`enable:"phaseUse", usable:1, selectTarget:2, multitarget:true, multiline:true`，`filterTarget` 判"其他角色且有魅标记"；`filter` 用 `game.countPlayer` 判场上至少两名有魅的其他角色。
-- **视为使用**：`user.useCard(get.autoViewAs({name:"sha", isCard:true}), victim, false)`（仙定 xianding 式写法）——直接以目标结算的 useCard 天然无距离限制、无次数限制、不耗实体牌；第一个【杀】可能致死，循环内逐个校验 `isIn()`。
-- **伤害判定**：useCard 前记录 `game.getGlobalHistory("everything", evt => evt.name == "damage").length` 基线，两次 useCard 后 `slice(pre)` 取新增伤害事件，filter 条件：`evt.num > 0 && evt.card?.name === "sha" && targets.includes(evt.source)`。⚠️ 全局历史记录只有 `cardMove/custom/useCard/changeHp/everything` 五个键，**没有 `damage` 键**（伤害历史只在玩家个人 actionHistory 上）——直接 `getGlobalHistory("damage")` 返回 undefined，须经 `"everything"` 键按事件名过滤（zhanfa.js 同款写法）。不用玩家 `getHistory("damage")`：伤害可能因转移/改源落在第三者身上，全局历史更稳。
-- **分支①**：貂蝉与存活目标各摸一张、各得一枚魅。**分支②的多目标解释**：文案单数"受伤角色"在两杀皆命中时按"每名受伤角色"处理——每名受伤角色移去一枚魅并各摸一张，**貂蝉只摸一张**（"你与其各摸一张牌"按集合读）。
-- **AI**：`result.target` 返回 `-get.attitude(player, target)`，双敌对目标优先。
+- **主动技结构**：`enable:"phaseUse", usable:1, selectTarget:2, multitarget:true, multiline:true`；`filterTarget` 按选择顺序分流：`ui.selected.targets` 为空时选"魅来源者"（只判 `countMark("魅魔_mark") > 0`，**不排自己**），否则选"受害者"（判 `target !== player && !ui.selected.targets.includes(target)`）；`filter` 用双层 `game.hasPlayer` 判"存在有魅角色，且其之外另有角色可作受害者"。
+- **content**：`num = user.countMark("魅魔_mark")` → `gainMei(user, -num)` 全移 → `for` 循环 num 次 `user.useCard(get.autoViewAs({name:"sha", isCard:true}), victim, false)`（视为使用天然无距离/次数限制、不耗实体牌；每轮校验双方 `isIn()`，中途死亡/离场即终止）。
+- **AI**：`result.target` 分流——第一个目标：自己最优（`5+num`，亲自开火不拆人）、敌方 `num+2`（拆全魅+借刀）、友方 `att+num-3`（权衡借刀收益与拆掉其保命魅）；第二个目标（受害者）返回 `-attitude`。
+- **联动**：视为【杀】是**虚拟牌**（`get.autoViewAs` 产物无 `.cards`），魅魔①的"非虚拟"限定将其排除——炸 N 枚魅就是净耗 N 枚，无回充循环；user 为其他角色时魅被移光已出范围，同样不触发。受害者濒死时魅魔②照常结算：有魅则移光续命、血线回正后继续挨杀，救不回或无魅时进入求桃；**真死则死亡结算完成后剩余杀终止**（循环开头 `isIn()` 守卫）。
 
-**关键 API：** `enable:"phaseUse"` + `selectTarget:2` + `multitarget` / `get.autoViewAs({name:"sha", isCard:true})` / `user.useCard(vcard, target, false)`（视为使用，无距离限制） / `game.getGlobalHistory("damage")` 全局伤害历史 / `Set` 去重受伤角色 / `player.line(targets, "thunder")`。
-
----
+**关键 API：** `usable:1`（每出牌阶段限一次） + `selectTarget:2` + `multitarget` + `ui.selected.targets` 分流式 `filterTarget` / `get.autoViewAs({name:"sha", isCard:true})` / `user.useCard(vcard, target, false)`（视为使用，无距离/次数限制） / `player.line(targets, "thunder")`。
 
 ---
 
@@ -777,3 +769,10 @@ export default function () {
 50. **dying 事件对已濒死角色幂等**（夺魂②）：damage 事件在 hp≤0 时创建新的 dying 事件，但其第一步（content.ts）检查 `player.isDying() || player.hp > 0` 即 finish——对已处于 `_status.dying` 中的角色（如 `_saveAfter` 中的濒死者）再次造成伤害**不会**嵌套新一轮求桃、也不会提前 die（`isDying()` = `_status.dying.includes(this) && hp <= 0 && isAlive()`，player.js）。随后 `recoverTo(1)` 经 changeHp 检测到 `_status.dying.includes(player) && player.hp > 0`，将其移出 `_status.dying` 并 finish 待决的 `_save`/`dying` 事件，救回照常成立。因此夺魂②的伤害目标可以合法选到濒死角色本身。
 51. **⚠️ `temp_ban` 封不死的技能类别——"封了但技能照用"**（止涕，2026-09 实测）：`tempBanSkill` 的 `temp_ban_` 标记在引擎里只有两个检查点——filterTrigger（library/index.js 触发排布）与 filterEnable（game/check.js 主动使用枚举）。**mod 被动修正（`getModableSkills`→`getSkills` 只过滤 `disabledSkills`/`skill_blocker`）、skillTag 响应类（`hasSkillTag` 同样走 `getSkills`）、以及依赖 `hasSkill` 判定的 `global:` 子技（如归訫的归訫_put，其 filter 找 `hasSkill("归訫")` 的持有者）都不受 temp_ban 影响**——表现为"弹了封技询问、选了技能、失效日志也打了，但技能照常生效"。强封方案（#47 已提示，止涕已改用）：`target.disableSkill(唯一禁用者, 技能)` 挂 `disabledSkills`，`getSkills`/`hasSkill`/`hasSkillTag`/mod 全部随之失效，`enableSkill(禁用者)` 解除；递归封 group 成员；首次禁用仅当技能同时有 `ondisable`+`onremove` 才执行破坏性清理（本扩展技能均无 `ondisable`）。解除时机仍用 #49 的 when 钩子，step 内改调 `player2.enableSkill("止涕")`。
 52. **⚠️ 全局历史没有 `damage` 键**（魅祸，2026-09 实测）：`game.getGlobalHistory(key)` 直接查 `_status.globalHistory[最新记录][key]`，而全局记录只初始化了 **`cardMove`/`custom`/`useCard`/`changeHp`/`everything` 五个键**（content.js phase 轮换处），`damage` 只存在于玩家个人 `actionHistory`（`player.getHistory("damage")`）——传 `"damage"` 会拿到 undefined，对其 `.length`/`.filter` 直接 TypeError。要按事件名全局检索用 `game.getGlobalHistory("everything", evt => evt.name == "damage")`（zhanfa.js 同款），需要"基线差"统计时对过滤结果 `.length`/`.slice()` 即可。
+53. **⚠️ `chooseTarget`/`chooseCardTarget` 的 filter 签名是 `(card, player, target)`**（魅心，2026-09 实测）：候选判定函数的参数序是 (card, 选择者, 候选目标)（yingbian.js 等官方技能同款）——箭头函数写成 `(card, target) => target !== player` 时，第二个参数捕获到的是**选择者本人**，`选择者 !== 貂蝉` 恒为 false，表现为"选择目标时点不了任何角色"（无报错、纯静默失败）。选"其他角色"直接用 `lib.filter.notMe`（神孙权冯河同款），自定义筛选务必写全三个参数 `(card, player2, target)`。
+54. **⚠️ 选牌区域规则："一张牌"≠ 手牌；"给自己"与"从别人拿"范围不同**（魅心①，2026-09 规则修正）：
+- **自己选/交自己的牌**（"交给…一张牌"、"将一张牌置于…"）：文案未显式写"手牌/手牌区"时，范围=**手牌区+装备区+木牛流马内**三处，位置码 `"hes"`——木牛流马牌带 `glows` 类混在手牌节点中（player.js iterableGetCards：`"h"` 排除 glows、`"s"` 仅选 glows），官方同款（族战定 `position:"hes"`）。
+- **从其他角色区域内选牌**（"获得其（X）张牌"）：范围=**手牌区+装备区+判定区**（`"hej"`）——比选择自己区域的牌多一个判定区；**木牛流马内的牌对其他角色不可见**，拿不到里面的牌，但木牛流马本身是装备区的装备牌，可以被拿走。
+- **"区域内的一张牌"**：手牌/装备/判定三区，`"hej"`（归訫② 同款）；显式"手牌"→`"h"`。判定区牌不属于自己选牌"一张牌"的范围。
+- **木牛流马的携带牌**：扣置牌挂在 muniu 虚拟牌的 `storages` 上；木牛离开装备区时引擎 `muniu.onLose`（card/extra.js）自动将 `storages` **置入弃牌堆**（swapEquip 移动除外）——拿走别人的木牛后内牌自动掉弃牌堆，技能无需自行处理。
+- `give`/`lose` 对装备/木牛流马牌无需特殊处理（移出时 gaintag 自动清除）。

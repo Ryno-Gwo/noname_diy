@@ -72,6 +72,7 @@ const characters = {
 		maxHp: 3,
 		hujia: 0,
 		skills: ["魅魔", "魅心", "魅祸"],
+		img: "extension/noname_diy/神貂蝉.png",
 	},
 };
 
