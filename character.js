@@ -74,6 +74,15 @@ const characters = {
 		skills: ["魅魔", "魅心", "魅祸"],
 		img: "extension/noname_diy/神貂蝉.png",
 	},
+	"武张飞": {
+		sex: "male",
+		group: "shen",
+		hp: 4,
+		maxHp: 4,
+		hujia: 0,
+		skills: ["恣胜", "显略", "豪贤"],
+		img: "extension/noname_diy/武张飞.jpg",
+	},
 };
 
 export default characters;

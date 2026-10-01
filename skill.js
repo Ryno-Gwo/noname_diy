@@ -2663,6 +2663,337 @@ const skills = {
 		skill_id: "魅祸",
 		_priority: 0,
 	},
+	"恣胜": {
+		audio: "ext:noname_diy:2",
+		locked: true,
+		forced: true,
+		trigger: {
+			// "使用…时"用 useCard 时机：位于 useCard1/useCard2 之后、牌效果结算之前——
+			// 摸牌/授予随使用立即结算（结算后才触发的 useCardAfter 体感错误）；
+			// "打出…时"用 respond 时机同理。旧增益的消耗也放本时机：本张牌的
+			// useCard1 计数、useCard2 直击、选取阶段 mod 均已生效完毕，且在同一触发器内
+			// 先消耗后授予，顺序确定，规避同时机两个触发器的排序竞争
+			player: ["useCard", "respond"],
+		},
+		filter(event, player, name) {
+			// 豪贤生效期间任意牌均触发
+			if (player.hasSkill("豪贤_aura")) {
+				return true;
+			}
+			// 点数为3的整数倍（含视为/转化牌：取其基础牌点数；
+			// 无点数牌经 cardnumber mod（恣胜②）视为3）
+			const num = get.number(event.card, player);
+			if (typeof num == "number" && num > 0 && num % 3 == 0) {
+				return true;
+			}
+			// 点数不合格时，仅"使用"有待消耗增益才触发（打出不消耗增益）
+			return name == "useCard" && player.hasSkill("恣胜_effect");
+		},
+		async content(event, trigger, player) {
+			// ①消耗：本张牌即上一份增益的"下一张牌"，其选取阶段 mod 与结算前效果
+			// （useCard1 计数、useCard2 直击）均已生效，至此移除
+			// （仅"使用"消耗——增益文案的效果均只针对"使用的下一张牌"，打出不消耗）
+			if (
+				event.triggername == "useCard" &&
+				player.hasSkill("恣胜_effect")
+			) {
+				player.removeSkill("恣胜_effect");
+			}
+			// ②授予：按本次牌倍数依次执行对应效果（第 i 档效果在"倍数≤i"时全部生效：
+			// 点数3（及经恣胜②视为3的无点数牌）→四档全含+摸一张，6→二三四档，9→三四档，12→仅第四档）
+			if (player.hasSkill("豪贤_aura")) {
+				// 豪贤生效期间：任意点数的牌均触发全部效果（效果一随本次改版降为摸一张）
+				await player.draw();
+				lib.skill.恣胜.addEffect(player, [2, 3, 4]);
+				return;
+			}
+			const num = get.number(trigger.card, player);
+			if (typeof num != "number" || num <= 0 || num % 3 != 0) {
+				return;
+			}
+			const bei = num / 3;
+			if (bei <= 1) {
+				// 1及以下倍：摸一张牌（原摸三张——配合②无点数视为3，丈八两牌合一杀若摸三张
+				// 会形成"2换3"的刷牌引擎，降为一张后 2换1 净亏，杜绝循环）
+				await player.draw();
+			}
+			const list = [];
+			for (let i = 2; i <= 4; i++) {
+				if (bei <= i) {
+					list.push(i);
+				}
+			}
+			if (list.length) {
+				// 2/3/4及以下倍：令"下一张牌"获得对应各档增益
+				lib.skill.恣胜.addEffect(player, list);
+			}
+		},
+		addEffect(player, list) {
+			player.addSkill("恣胜_effect");
+			player.storage.恣胜_effect = list;
+			player.markSkill("恣胜_effect");
+			const info = [];
+			if (list.includes(2)) info.push("下一张牌无视距离和次数限制");
+			if (list.includes(3)) info.push("下一张牌无法被响应");
+			if (list.includes(4)) info.push("下一张基本牌可指定至多三个目标");
+			game.log(player, "的", "#g" + info.join("；"));
+		},
+		mod: {
+			// ②无点数牌的点数始终视为3：挂 get.number 尾部的 cardnumber mod 钩子
+			// （get/index.js：checkMod(card, owner, number, "cardnumber", owner)——无点数牌的
+			// 基数为 null 也会进 mod，返回 3 即全局生效，filter/content 的 get.number 自动跟随；
+			// ⚠️ mod 内禁止调用 get.number（无限递归，踩坑#45 同理）；"unsure" 在钩子之前
+			// 提前返回、不经 mod，由 filter 的 typeof 兜底）
+			cardnumber(card, player, number) {
+				if (typeof number != "number" || number <= 0) {
+					return 3;
+				}
+			},
+		},
+		skill_id: "恣胜",
+		_priority: 0,
+	},
+	"恣胜_effect": {
+		charlotte: true,
+		sub: true,
+		sourceSkill: "恣胜",
+		// ⚠️ 触发类附属技能必须写 forced：引擎对所有非 forced/direct 触发技在每次生效前
+		// 默认弹 chooseBool 询问（"是否发动【恣胜-附属技能】？"），sub 技能也不例外
+		// （踩坑#59）——表现为指定目标后多出一次可取消的询问
+		forced: true,
+		mark: true,
+		marktext: "恣",
+		intro: {
+			content(storage) {
+				const list = storage || [];
+				const info = [];
+				if (list.includes(2)) info.push("下一张牌无视距离和次数限制");
+				if (list.includes(3)) info.push("下一张牌无法被响应");
+				if (list.includes(4)) info.push("下一张基本牌可指定至多三个目标");
+				return "你使用的" + info.join("；");
+			},
+		},
+		mod: {
+			// 2倍：下一张牌无视距离（踩坑#42：不匹配时必须隐式返回 undefined，不得返回 false）
+			targetInRange(card, player) {
+				if (player.getStorage("恣胜_effect").includes(2)) {
+					return true;
+				}
+			},
+			// 2倍：无视次数限制
+			cardUsable(card, player) {
+				if (player.getStorage("恣胜_effect").includes(2)) {
+					return Infinity;
+				}
+			},
+			// 4倍：下一张基本牌可指定至多三个目标（selectTarget mod 约定为原地修改 range；
+			// range[1]==-1 表示无上限，跳过——mapodoufu 同款写法；仅基本牌生效，
+			// 避免顺拆/乐不思蜀/闪电/装备牌等非基本牌的多目标歧义）
+			selectTarget(card, player, range) {
+				if (
+					player.getStorage("恣胜_effect").includes(4) &&
+					get.type(card) == "basic" &&
+					range[1] != -1
+				) {
+					range[1] = Math.max(range[1], 3);
+				}
+			},
+		},
+		trigger: {
+			player: "useCard2",
+		},
+		filter(event, player) {
+			// 3倍：此牌无法被响应
+			return player.getStorage("恣胜_effect").includes(3);
+		},
+		async content(event, trigger, player) {
+			// directHit 同破军②（踩坑#20）
+			trigger.directHit.addArray(trigger.targets.slice(0));
+			game.log(player, "的", trigger.card, "无法被响应");
+		},
+		onremove(player, skill) {
+			delete player.storage[skill];
+		},
+		ai: {
+			notemp: true,
+		},
+		skill_id: "恣胜_effect",
+		_priority: 0,
+	},
+	"显略": {
+		audio: "ext:noname_diy:2",
+		enable: "phaseUse",
+		filter(event, player) {
+			// 你与其各展示一张牌：任一方无牌可展示（手牌/装备/木牛流马皆空）则不可发动
+			if (player.countCards("hes") <= 0) {
+				return false;
+			}
+			return game.hasPlayer((current) =>
+				lib.skill.显略.filterTarget(event, player, current),
+			);
+		},
+		filterTarget(card, player, target) {
+			// 显略的目标是"每名其他角色"（你与其各展示一张牌）
+			if (target === player) {
+				return false;
+			}
+			if (target.countCards("hes") <= 0) {
+				return false;
+			}
+			// 出牌阶段对每名其他角色限一次：显略_used 为回合结束自动移除的临时技
+			// （神机_used 同款限次方式），storage 随 onremove 清理
+			if (!player.hasSkill("显略_used")) {
+				return true;
+			}
+			return !player.getStorage("显略_used").includes(target);
+		},
+		selectTarget: 1,
+		async content(event, trigger, player) {
+			const target = event.target;
+			if (!target.isIn()) {
+				return;
+			}
+			player.addTempSkill("显略_used");
+			player.storage.显略_used ??= [];
+			player.storage.显略_used.push(target);
+			// 你与其依次展示一张牌：先自己选并亮出，目标看到后再选（"依次"语义）
+			const myResult = await player
+				.chooseCard("hes", true, "显略：展示一张牌（你与其依次展示一张牌）")
+				.set("ai", (card) => {
+					// 自己的展示牌不会失去（①的 gain 对自己手牌区已有的牌跳过转移、②不移动牌），低价值优先
+					return -get.value(card, player);
+				})
+				.forResult();
+			if (!myResult.bool || !myResult.cards || !myResult.cards.length) {
+				return;
+			}
+			const myCard = myResult.cards[0];
+			await player.showCards(
+				[myCard],
+				`${get.translation(player)}发动了【显略】`,
+			);
+			const theirResult = await target
+				.chooseCard(
+					"hes",
+					true,
+					`显略：${get.translation(player)}已展示一张牌，请展示你的牌`,
+				)
+				.set("ai", (card) => {
+					// 张飞的牌 mod 3 → 对方展示 mod 为 need=(3-r)%3 的牌时两牌之和为3的倍数
+					// （分支②：双方各摸一张且张飞重置豪贤，展示牌均不失去）
+					const r = (get.number(myCard, player) || 0) % 3;
+					const need = (3 - r) % 3;
+					const num = (get.number(card, target) || 0) % 3;
+					const value = get.value(card, target);
+					// 张飞为队友：凑"和为3的倍数"（白赚摸牌+助其刷新豪贤）；
+					// 不确定身份或敌方：凑"和不为3的倍数"逼分支①，阻止张飞刷新豪贤
+					// （代价是失去一张低价值牌+挨一刀，按设计以断刷新为优先）
+					if (get.attitude(target, player) > 0) {
+						return num == need ? 10 - value : 0;
+					}
+					return num != need ? 10 - value : 0;
+				})
+				.forResult();
+			if (
+				!theirResult.bool ||
+				!theirResult.cards ||
+				!theirResult.cards.length
+			) {
+				return;
+			}
+			const theirCard = theirResult.cards[0];
+			await target.showCards([theirCard], `${get.translation(target)}展示了`);
+			const n1 = get.number(myCard, player);
+			const n2 = get.number(theirCard, target);
+			if (
+				typeof n1 != "number" ||
+				typeof n2 != "number" ||
+				n1 <= 0 ||
+				n2 <= 0
+			) {
+				return;
+			}
+			if ((n1 + n2) % 3 != 0) {
+				// ①点数之和不为3的整数倍：获得这些牌，并视为对其使用一张不计入次数限制的【杀】
+				// （gain 会自动从原持有者区域移牌，含自己展示的装备区牌——自己的牌在自己区域，
+				// gain 会跳过转移）
+				await player.gain([myCard, theirCard], "gain2");
+				// 不计入次数：创建 useCard 事件后、结算前置 addCount=false，
+				// 跳过引擎对 stat.card[杀] 的自增（自增点在 useCard 步骤开头、useCard1 之前），
+				// 不消耗本回合出杀次数
+				const useEvt = player.useCard(
+					get.autoViewAs({ name: "sha", isCard: true }),
+					target,
+					false,
+				);
+				useEvt.addCount = false;
+				await useEvt;
+			} else {
+				// ②点数之和为3的整数倍：你与其各摸一张牌，然后令【豪贤】视为未发动过
+				await player.draw();
+				await target.draw();
+				if (player.storage.豪贤) {
+					player.restoreSkill("豪贤");
+					game.log(player, "的限定技【豪贤】视为未发动过");
+				}
+			}
+		},
+		subSkill: {
+			used: {
+				charlotte: true,
+				onremove(player, skill) {
+					delete player.storage[skill];
+				},
+				intro: {
+					content: "本回合已对以上角色发动过【显略】",
+				},
+			},
+		},
+		skill_id: "显略",
+		_priority: 0,
+	},
+	"豪贤": {
+		audio: "ext:noname_diy:2",
+		enable: "phaseUse",
+		limited: true,
+		filter(event, player) {
+			// 限定技：未发动过（awakenSkill 置 storage 并禁用技能；显略② restoreSkill 复原）
+			return !player.storage.豪贤;
+		},
+		async content(event, trigger, player) {
+			player.awakenSkill("豪贤");
+			// 直到你的下个回合开始（addTempSkill 于其下一次 phaseBeginStart 自动移除，
+			// 相天2 同款时效写法）
+			player.addTempSkill("豪贤_aura", { player: "phaseBeginStart" });
+		},
+		ai: {
+			order: 8,
+			result: {
+				player(player2) {
+					// 手里有牌可打时才值得开启（收益来自后续用牌/打出）
+					return player2.countCards("he") > 0 ? 1 : 0;
+				},
+			},
+		},
+		skill_id: "豪贤",
+		_priority: 0,
+	},
+	"豪贤_aura": {
+		charlotte: true,
+		sub: true,
+		sourceSkill: "豪贤",
+		mark: true,
+		marktext: "贤",
+		intro: {
+			content: "【恣胜】的所有效果均可对任意点数的牌生效，直到你的下个回合开始",
+		},
+		onremove: true,
+		ai: {
+			notemp: true,
+		},
+		skill_id: "豪贤_aura",
+		_priority: 0,
+	},
 };
 
 export default skills;

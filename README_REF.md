@@ -74,7 +74,7 @@ export default function () {
 
 - **音频写法**：`audio: "ext:扩展名:2"`（数字=默认语音档位）；角色阵亡语音 `dieAudios: ["ext:扩展名/audio/die/角色名.mp3"]`。
 - **`skill_id` 与 `_priority`**：技能对象末尾固定写 `"skill_id": "技能名"`（保持 ID 稳定）与 `"_priority": 0`（触发/修正优先级，数值越大越靠后执行）。
-- **附属技能命名约定**：`主技能_用途`。本扩展出现过的后缀：`_rescue`（救场）、`_put`（全局放置）、`_use`（虚拟使用）、`_used`（本回合已用标记）、`_lock`（锁技能载体）、`_mark`（标记展示载体）、`_backup`（chooseButton 后备技能）、`_negate`（令牌对己无效，疑城②）。
+- **附属技能命名约定**：`主技能_用途`。本扩展出现过的后缀：`_rescue`（救场）、`_put`（全局放置）、`_use`（虚拟使用）、`_used`（本回合已用标记）、`_lock`（锁技能载体）、`_mark`（标记展示载体）、`_backup`（chooseButton 后备技能）、`_negate`（令牌对己无效，疑城②）、`_effect`（"下一张牌"待生效增益载体，恣胜）、`_aura`（持续光环载体，豪贤）。
 - **三大核心机制**：
   1. **标记牌（扩展区）**：牌置于武将牌上（`addToExpansion`），按 gaintag 名区分类型（"归訫"/"煋"/神徐盛"疑兵"牌，其 gaintag 为"疑城"），可被全场角色读取花色、被当作虚拟牌使用。
   2. **技能来源追踪**：`player.storage.夺魂_sources = {技能名: 来源角色}`，供魂契③偷技、夺魂的代价与止涕的计数共用。
@@ -92,6 +92,7 @@ export default function () {
 | 应天司马懿（shen，4/4） | 戢鳞、英猷（英猷_seal/英猷_skip）、应天（觉醒技）、倾朝 | "志"资源管理 + 花色联动 + 觉醒后鬼才/完杀/连破 |
 | 神冶（shen，4/4） | 冶武、炼刃、穷兵 | 武器栏增减经济 + 弃装备牌抉择（拿牌/伤害）+ 濒死保命 |
 | 神傀（shen，4/4） | 傀体、百战、移魂 | 傀儡机制：受击反制 + 被指定赚牌 + 锦囊到手即弃换续航 + 无限用牌 + 使用杀以体力为燃料 + 流离式目标转移 |
+| 武张飞（shen，4/4） | 恣胜（恣胜_effect）、显略（显略_used）、豪贤（豪贤_aura） | 点数3引擎：倍数≤i全档依次触发 + 依次展示博弈两分支 + 限定技全域光环 |
 
 ---
 
@@ -715,6 +716,83 @@ export default function () {
 
 ---
 
+## 2.9 武张飞
+
+### 2.9.0 恣胜（恣胜 / 恣胜_effect）
+
+**文案：**
+> 锁定技。①当你使用或打出点数为3的整数倍的牌时，根据倍数依次执行对应的效果：1及以下倍，你摸一张牌；2及以下倍，你使用的下一张牌无视距离和次数限制；3及以下倍，你使用的下一张牌无法被响应；4及以下倍，你使用的下一张基本牌可指定至多三个目标。②你的无点数牌的点数始终视为3。
+
+**文案（注）：** `倍数 = 点数 / 3`（标准牌堆点数1~13，仅 3/6/9/12 四档；无点数牌经②视为3，即倍数1），第 i 档效果在**倍数 ≤ i** 时全部依次生效：点数3（及一切无点数牌）→全部四档+摸一张（价值最高的牌），6→二三四档，9→三四档，12→仅第四档（2026-09-30 二次改版：效果一摸牌降为**一张**——配合②，丈八两牌合一杀若摸三张会形成"2换3"刷牌引擎，2换1 净亏杜绝循环；效果四限定**下一张基本牌**——避免顺拆/乐不思蜀/闪电/装备牌等非基本牌的多目标歧义；新增效果②**无点数牌的点数始终视为3**——覆盖显略的视为【杀】、丈八两牌合一杀等无实体基础的虚拟牌）。豪贤生效期间（见 2.9.2）任意点数的牌均触发**全部效果**（摸一张 + 2/3/4档叠加授予）。
+
+**设计点：**
+1. 点数3核心：倍数越小命中的档位越多（"倍数≤i"全含式判定），价值最高的牌是3而不是各点数各有价值——鼓励围绕点数3组织手牌（用户明确的设计原则）。
+2. ②"无点数牌的点数始终视为3"：把显略的视为【杀】、丈八两牌合一杀等无实体基础的虚拟牌纳入恣胜引擎（视为3→触发全部四档+摸一张）；1倍摸牌相应降为一张，丈八 2换1 净亏、不形成刷牌循环（用户明示的改版动机）。
+3. "下一张牌"语义的落点：延迟增益用 `恣胜_effect` 附属技承载，storage 为**倍数数组**（如 `[3,4]` 或豪贤期间的 `[2,3,4]`），多档可叠加，`intro.content` 按 storage 展示当前待生效增益。
+4. ④限基本牌：目标扩张只对杀/闪/桃/酒等基本牌生效，锦囊（顺拆双目标、闪电无目标）与装备牌的多目标歧义不纳入。
+5. 豪贤期间"所有效果对任意点数生效" = 任意牌触发全部效果（摸一张 + `[2,3,4]` 满档）。
+
+**实现要点：**
+- **授予/消耗时机选 `useCard`/`respond`（使用/打出时）**：useCard 时机位于 useCard1/useCard2 之后、牌效果结算之前——摸三张/授予随使用**立即**结算（挂 `useCardAfter` 会变成整张牌结算完毕后才触发，五谷丰登点数3"结算结束才摸牌"的体感错误即源于此）；旧增益的消耗也放本时机：本张牌的选取阶段 mod、useCard2 直击均已生效完毕，且在同一触发器内**先消耗后授予**，顺序确定，规避同时机两个触发器的排序竞争。**打出只授予不消耗**——增益文案的效果均只针对"使用的下一张牌"，打出（respond）不该白白浪费待生效增益。
+- **消耗守卫在 filter**：`hasSkill("豪贤_aura") || 点数为3的倍数 || (useCard 且 hasSkill("恣胜_effect"))`——有待生效增益的"使用"时**必定触发**（哪怕本张牌点数不合格），保证增益一定在本张牌上生效后移除，不会永久滞留；filter 用第三参数 `name` 区分 useCard/respond（踩坑#8）。
+- **多档授予**：`bei<=1` 时 `draw()` 一张；再 `for i in 2..4` 收集所有 `bei<=i` 的档位成数组一次授予（点数3及无点数牌→`[2,3,4]`，6→`[2,3,4]`，9→`[3,4]`，12→`[4]`）。
+- **②无点数视为3**：`mod.cardnumber(card, player, number)`——`get.number` 尾部钩子（get/index.js：`checkMod(card, owner, number, "cardnumber", owner)`），无点数牌基数 null 也会进 mod，返回 3 即**全局生效**（filter/content 的 `get.number(card, player)` 自动跟随，含任意查询方）；⚠️ mod 内禁调 `get.number`（无限递归，踩坑#45 同理）；"unsure" 在钩子前提前返回、不经 mod，由 filter 的 typeof 兜底。详见踩坑#60。
+- **延迟增益载体 `恣胜_effect`**：charlotte+sub+sourceSkill，**必须 `forced:true`**（踩坑#59：触发类附属技缺 forced，每次生效前都会弹"是否发动"取消框）；`mark:true + marktext:"恣" + intro.content(storage)` 展示；storage 为倍数数组，`onremove` 清 storage。各档落地：
+  - **2倍（无视距离/次数）**：`mod.targetInRange` 返 `true`（踩坑#42：不匹配时隐式 undefined，不得返 false）、`mod.cardUsable` 返 `Infinity`。
+  - **3倍（无法被响应）**：`useCard2` 时机 `trigger.directHit.addArray(trigger.targets.slice(0))`（破军②同款，踩坑#20）。
+  - **4倍（下一张基本牌至多三目标）**：`mod.selectTarget` **原地修改** `range[1] = Math.max(range[1], 3)`，**仅对 `get.type(card) == "basic"` 的牌生效**（`range[1]==-1` 表示无上限需排除——mapodoufu 同款；charlotte 技能的 mod 照常生效，getModableSkills 只过滤 `info.mod` 存在性）。（原4倍"不计入次数"的 nocount 模板应用已随首轮改版删除，见踩坑#58 通用参考。）
+- **数字兜底**：`get.number(card, player)` 对无点数牌经 cardnumber mod 已返回 3，filter/content 以 `typeof num == "number" && num > 0` 兜底 `"unsure"` 等钩子外情形。
+- **AI**：锁定技无需选择；`恣胜_effect` 的 `ai.notemp` 防止 AI 误判临时技。无实体牌的虚拟杀（显略①、丈八合杀）经②视为点数3，常规期间即触发恣胜（摸一张+满档延迟增益）——显略①→恣胜形成链式引擎。
+
+**关键 API：** `useCard`/`respond`（使用/打出时机，useCard 在 useCard1/2 后、牌效果前） / `get.number(card, player)`（虚拟牌取基础牌点数；无点数经 cardnumber mod 返回3） / **`mod.cardnumber`**（"无点数视为X点"，踩坑#60） / `mod.selectTarget`（**原地修改** range 数组，`range[1]==-1` 无上限） / `mod.targetInRange`/`mod.cardUsable` / `directHit.addArray`（踩坑#20） / **附属触发技必须 forced**（踩坑#59） / `getStorage`（默认返回 `[]`） / `onremove` 清 storage。
+
+---
+
+### 2.9.1 显略
+
+**文案：**
+> 出牌阶段对每名其他角色限一次，你与其依次展示一张牌，然后根据这两张牌的点数执行对应效果：1、点数之和不为3的整数倍，你获得这些牌并视为对其使用一张不计入次数限制的【杀】；2、点数之和为3的整数倍，你与其各摸一张牌并令【豪贤】视为未发动过。
+
+**文案（注）：** 2026-09-30 改版：三分支简化为两分支（原"点数之差摸牌"分支删除）；"各展示"改"依次展示"——张飞先亮牌，目标**看到张飞的牌后再**选。判定：`(n1+n2)%3 != 0` → ①，否则 → ②。
+
+**设计点：**
+1. 依次展示的博弈：张飞先亮牌，目标针对性回应——友方凑"和为3的倍数"（②分支：双方各摸一张+张飞刷新豪贤，**双方展示牌均不失去**，纯收益）；不确定身份或敌方凑"和不为3的倍数"（①分支：目标失去一张低价值牌+挨一刀，换取**阻止张飞刷新豪贤**——按用户设计，断刷新优先于保牌）。
+2. ②分支是豪贤唯一的复原途径（"视为未发动过"），构成"豪贤→显略②重置→再开豪贤"的循环许可。
+3. ①分支的视为【杀】不计入次数：创建 useCard 事件后置 `addCount=false` 再 await，不消耗本回合出杀次数。张飞自己的展示牌两分支都不会失去（①的 gain 对自己手牌区已有的牌跳过转移、②不移动牌）。
+
+**实现要点：**
+- **限次**：`enable:"phaseUse"`，每名其他角色每出牌阶段一次——`addTempSkill("显略_used")` + storage 数组记录目标（神机_used 同款限次方式；filter 先查 `hasSkill("显略_used")` 再查数组，`onremove` 清 storage，双保险）。⚠️ filter/filterTarget 另需"双方均有牌可展示"守卫（`countCards("hes") > 0`）——任一方三处皆无牌时强制 `chooseCard` 会无牌可选。
+- **依次展示**：`player.chooseCard("hes")` → `player.showCards([我的牌])` 亮出 → `target.chooseCard("hes"…, true)`（目标**能看到已亮出的牌**再选）→ `target.showCards([其的牌])`。"一张牌"未限定区域 = 手牌/装备/木牛流马三处 `"hes"`（踩坑#54）。
+- **两分支判定**：`(n1+n2)%3 != 0` → `player.gain([我的牌, 其的牌], "gain2")`（**gain 自动从原持有者区域移牌**，自己手牌区已有的牌自动跳过）→ 视为【杀】不计入次数；否则 → 双方各 `draw()` 一张 + `player.storage.豪贤` 为真时 `restoreSkill("豪贤")`（**限定技重置用 `restoreSkill`**，awakenSkill 置 storage+disable，restore 反向复原，见踩坑#55）。
+- **视为【杀】不计入次数**：`const useEvt = player.useCard(get.autoViewAs({name:"sha", isCard:true}), target, false); useEvt.addCount = false; await useEvt;`——创建事件后、await 前置 addCount=false，跳过引擎 stat 自增点（useCard content 开头即执行、先于 useCard1），**无需** stat 回退（踩坑#58 场景②）。另：该视为【杀】无实体牌基础，经恣胜②视为点数3——使用它会触发恣胜1倍（摸一张+满档延迟增益），显略→恣胜链式联动。
+- **目标 AI（用户给定策略）**：`r = get.number(张飞的牌) % 3`，`need = (3-r) % 3`（对方展示 mod 为 need 的牌即凑成"和为3的倍数"）；张飞为队友（`attitude(target, player) > 0`）→ 选 **mod==need** 中价值最低的牌；不确定身份或敌方 → 选 **mod!=need** 中价值最低的牌（评分 `满足 ? 10 - value : 0`，无满足项时兜底任选）。
+- **张飞自身 AI**：展示牌不会失去，低价值优先（`-get.value`）；对敌时预判对方无 need-mod 牌可强逼②分支，属可选进阶策略，未实现。
+
+**关键 API：** `enable:"phaseUse"` / `filterTarget`（签名 `(card, player, target)`，踩坑#53） / `addTempSkill("显略_used")` + storage 数组限次（神机_used 同款） / `player.showCards → target.chooseCard → target.showCards`（依次展示链） / `player.gain(cards, "gain2")`（gain 自动从原持有者移牌、跳过自己手牌区已有的牌） / `get.autoViewAs({name:"sha", isCard:true})` + `player.useCard(vcard, target, false)`（魅祸同款视为使用） / **创建时置 `addCount=false`**（跳过统计自增，无需回退，踩坑#58 场景②） / `restoreSkill`（限定技复原，踩坑#55） / `getStorage` 默认 `[]`。
+
+---
+
+### 2.9.2 豪贤
+
+**文案：**
+> 限定技。出牌阶段，你可以令【恣胜】的所有效果均可对任意点数的牌生效，直到你的下个回合开始。
+
+**文案（注）：** 用户 2026-09-30 纠正后的定稿文案："限定技。出牌阶段，你可以令【恣胜】的所有效果均可对任意点数的牌生效，直到你的下个回合开始。"
+
+**设计点：**
+1. 恣胜的爆发引擎：开启后直到下个回合开始，**任意点数的牌**均触发恣胜**全部效果**（摸一张 + 2/3/4档延迟增益叠加授予；无点数牌经恣胜②视为3，与光环叠加同样成立）。
+2. 限定技 + 显略②重置：豪贤→显略②（凑"和为3的倍数"）→复原豪贤，形成"资源受限的循环"。
+3. 时效"直到你的下个回合开始"：相天2 同款 `addTempSkill(skill, {player:"phaseBeginStart"})`——出牌阶段使用，下一次 phaseBeginStart 即下个自己回合开始，精确落地"直到你的下个回合开始"。
+
+**实现要点：**
+- **主动限定技**：`enable:"phaseUse" + limited:true`，filter 查 `!player.storage.豪贤`（awakenSkill 置 storage[豪贤]=true 并经 `_awake` 禁用技能，双闸门；restoreSkill 复原后 storage 回 false 重新可用）。
+- **光环载体 `豪贤_aura`**：charlotte+sub，`mark:true + marktext:"贤" + intro.content`（球状标记展示剩余时效），`addTempSkill("豪贤_aura", {player:"phaseBeginStart"})` 挂载，到期自动移除；恣胜 filter/content 查 `hasSkill("豪贤_aura")` 判定光环是否生效。onremove:true。
+- **AI**：order 8（先开光环再打牌）；result.player 在有手牌时返 1。锁定收益来自后续用牌，无手牌时不用。
+
+**关键 API：** `enable:"phaseUse"` + `limited:true` + `awakenSkill`/`restoreSkill`（限定技标准闭环） / `addTempSkill(skill, {player:"phaseBeginStart"})`（"直到下个回合开始"时效，相天2 同款） / `mark:true + marktext + intro.content` 字符串式标记。
+
+---
+
 # 3 踩坑记录
 
 1. **cost 的选项不传给 content**：手动 `event.result.cost_data = ...`（止涕/相天）。
@@ -776,3 +854,9 @@ export default function () {
 - **"区域内的一张牌"**：手牌/装备/判定三区，`"hej"`（归訫② 同款）；显式"手牌"→`"h"`。判定区牌不属于自己选牌"一张牌"的范围。
 - **木牛流马的携带牌**：扣置牌挂在 muniu 虚拟牌的 `storages` 上；木牛离开装备区时引擎 `muniu.onLose`（card/extra.js）自动将 `storages` **置入弃牌堆**（swapEquip 移动除外）——拿走别人的木牛后内牌自动掉弃牌堆，技能无需自行处理。
 - `give`/`lose` 对装备/木牛流马牌无需特殊处理（移出时 gaintag 自动清除）。
+55. **限定技"视为未发动过"用 `restoreSkill`**（显略③→豪贤）：引擎 `awakenSkill` 的实现是 `disableSkill(技能+"_awake", 技能)` + `awakenedSkills.add` + `storage[技能]=true`（**不移除技能**，disable 使其退出 enable 枚举与 hasSkill），`restoreSkill` 反向复原（storage 回 false、enableSkill、重新 markSkill）。判断"是否已发动"用 `player.storage.技能` 真值判断即可，**不要**去 `awakenedSkills` 集合上找——它是 noname 扩展数组（`.add`/`.remove`/`.includes`），没有 `.has`。显略③的条件写法：`if (player.storage.豪贤) { player.restoreSkill("豪贤"); }`。
+56. **"下一张牌"延迟增益的授予/消耗时机**（恣胜）："当你使用…时"的正确挂点是 **`useCard`**（useCard1/useCard2 之后、牌效果结算之前）——挂 `useCardAfter` 会退化成"整张牌结算完毕后才触发"（实测：点数3五谷丰登结算结束才摸三张，体感即错）。授予与消耗放**同一触发器内先消耗后授予**，顺序确定；不要拆成两个技能挂同一时机——同优先级触发器的执行顺序不保证 consume 先于 grant，会出现"新授予的增益立刻被旧消耗逻辑删掉"的竞争。filter 需含"有待生效增益的'使用'"守卫，保证本张牌点数不合格时增益也会被消耗，不永久滞留；**打出（respond）只授予不消耗**（增益效果均只针对"使用的下一张牌"）。另一注意点：事件被 `trigger.cancel()`（如飛影的无效化）时本次使用中断，增益视是否已过 useCard 时机决定去留，语义可接受。
+57. **`mod.selectTarget` 实现"可指定至多X个目标"**（恣胜4倍）：`game.checkMod(card, player, range, "selectTarget", player)` 传入的 range 数组是**原地修改**语义（官方 mapodoufu 同款 `range[1]++`），不是返回值语义；`range[1] == -1` 表示无上限目标（如借刀），必须排除。写法：`if (条件 && range[1] != -1) range[1] = Math.max(range[1], 3);`。charlotte 技能的 mod 照常生效（getModableSkills 只过滤 `info.mod` 存在性，不看 charlotte）。
+58. **"不计入次数"的两种场景与写法**（原恣胜4倍 / 显略①）：① **下张牌免计**（被动增益挂在下张牌上）——只能照搬引擎 `nocount` 模板：`useCard1`（`firstDo:true`）时 `trigger.addCount=false` + **手动回退统计** `player.getStat().card[牌名]--`。原因：useCard content 里 stat 自增点（8951 行）先于 useCard1 触发点（9211 行）执行，触发时置 addCount=false 已来不及阻止自增，必须事后回退。② **技能内虚拟使用免计**（显略的视为【杀】）——创建事件后、await 前置旗即可：`const useEvt = player.useCard(...); useEvt.addCount = false; await useEvt;`，自增点在事件内容开头、创建时已置旗 → **整体跳过自增，无需 stat 回退**（此时补 stat-- 反而会多扣一次）。两场景不可混用写法。（2026-09-30 恣胜改版后四档不再含"不计入次数"，场景①在本扩展已无使用，保留作通用参考；场景②仍用于显略①。）
+59. **触发类附属技能必须写 `forced`**（恣胜_effect，2026-09-30 实测）：引擎对所有非 `forced`/`direct` 的触发技，在每次生效前默认弹 chooseBool 询问（"是否发动【XXX】？"），`sub`/`charlotte` 附属技也不例外——表现为恣胜4倍增益指定目标后多出一次"是否发动恣胜-附属技能"的可取消询问，取消即效果丢失。修复：效果型附属触发技一律 `forced: true`（锁定生效），反馈靠引擎自动弹泡（sourceSkill 技能名）+ 自行 `game.log` 具体效果。
+60. **"无点数牌视为X点"用 `mod.cardnumber` 实现**（恣胜②，2026-09-30）：`get.number` 尾部（get/index.js）有 `game.checkMod(card, owner, number, "cardnumber", owner)` 钩子——无点数牌（无 `card.number` 且 `.cards` 非1张，如丈八两牌合一杀、纯 `autoViewAs` 虚拟牌）的基数是 `null`，**同样会进 mod**，mod 签名 `(card, player, number, preResult)`（number=未经 mod 的原始基数），返回数字即生效、返回 undefined 不修改。写法：`mod:{ cardnumber(card, player, number){ if (typeof number != "number" || number <= 0) return 3; } }`。⚠️ mod 内禁止调用 `get.number`（其内部再查 mod → 无限递归，踩坑#45 同理）；`"unsure"` 在钩子**之前**提前 return、不经 mod——需要在技能层用 `typeof` 兜底；filter/content 里照常 `get.number(event.card, player)`（第二参传技能拥有者/使用者）即可自动吃到 mod。
