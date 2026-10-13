@@ -83,6 +83,15 @@ const characters = {
 		skills: ["恣胜", "显略", "豪贤"],
 		img: "extension/noname_diy/武张飞.jpg",
 	},
+	"神左慈": {
+		sex: "male",
+		group: "shen",
+		hp: 4,
+		maxHp: 4,
+		hujia: 0,
+		skills: ["幻魂", "幻劫", "幻生"],
+		img: "extension/noname_diy/神左慈.png",
+	},
 };
 
 export default characters;
