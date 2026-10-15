@@ -3095,30 +3095,26 @@ const skills = {
 		locked: true,
 		forced: true,
 		trigger: {
-			// 受到伤害侧：来源不为自己才触发——火攻等自毁伤害已由 source 侧覆盖，
-			// 避免同一次自伤触发两次（受伤侧屏蔽自源，伤人侧只算一次）
-			player: "damageBegin4",
-			// 造成伤害侧：伤害结算（含死亡结算）后触发
-			source: "damageSource",
+			// "一名角色受伤害时"：任意角色（含自己）受到伤害都触发，global 单时机挂法
+			// （damageBegin4 在扣体力前触发，选项2的回复可抵消1点伤害、抢救濒死边缘的角色）
+			global: "damageBegin4",
 		},
-		// 两个时机的 trigger.player 均为受伤者，弹泡统一指向对方
+		// 受伤者 = trigger.player，弹泡指向对方
 		logTarget: "player",
-		filter(event, player, name) {
-			// 0点伤害不算"伤害"（选项1摸牌回复恒可行，其余选项可行性在 content 内判）
-			if (!(event.num > 0)) {
-				return false;
-			}
-			// 受到伤害侧：来源不为自己
-			if (name === "damageBegin4") {
-				return event.source !== player;
-			}
-			return true;
+		filter(event, player) {
+			// 0点伤害不算"伤害"（选项1摸牌恒可行，其余选项可行性在 content 内判）
+			return event.num > 0 && event.player && event.player.isIn();
 		},
 		async content(event, trigger, player) {
-			// 单次抉择：每次触发三选一（文案无循环），选项2自带体力条件
-			const canPay = player.hp > 1;
+			const victim = trigger.player;
+			// 单次抉择：每次触发四选一（文案无循环）
+			// 选项2双条件：自己有牌可弃，且受伤者未满血（满血回复无意义，不进选项）
+			// 选项3配额：当前持有所得技数<体力上限（不再失去体力；配额=体力上限）
+			const canHeal =
+				player.countCards("he") > 0 && victim.hp < victim.maxHp;
 			const fromPile =
-				canPay && lib.skill.幻魂.getPileCandidates(player).length > 0;
+				lib.skill.幻魂.getGained(player).length < player.maxHp &&
+				lib.skill.幻魂.getPileCandidates(player).length > 0;
 			const canBan =
 				lib.skill.幻魂.getGained(player).length > 0 &&
 				game.hasPlayer(
@@ -3126,26 +3122,37 @@ const skills = {
 						current !== player &&
 						lib.skill.幻魂.banCandidates(current).length > 0,
 				);
-			const options = ["摸牌回复"];
+			// 选项与文案同步构建：不可行选项不进列表（无牌可弃/配额耗尽/无可封目标时不显示其文案）
+			const options = ["摸一张牌"];
+			const choices = ["摸一张牌"];
+			if (canHeal) {
+				options.push("弃牌回复");
+				choices.push(`弃一张牌并令${get.translation(victim)}回复一点体力`);
+			}
 			if (fromPile) {
 				options.push("观看武将牌堆");
+				choices.push(
+					"若你此法获得的技能数小于你的体力上限，你观看武将牌堆中的五张牌并获得其中一个技能",
+				);
 			}
 			if (canBan) {
 				options.push("失技封敌");
+				choices.push(
+					"失去一个通过【幻魂】获得的技能，然后令一名其他角色失去一个技能，直到其下个回合结束",
+				);
 			}
 			let choice;
 			if (options.length === 1) {
 				// 仅选项1可行：锁定技直接执行，无需询问（百战式）
-				choice = "摸牌回复";
+				choice = "摸一张牌";
 			} else {
 				const result = await player
 					.chooseControl(options)
-					.set("prompt", "幻魂：请选择一项")
-					.set("choiceList", [
-						"摸一张牌并回复一点体力",
-						"若你的体力值大于1，你失去一点体力，然后观看剩余武将牌堆中的X个并获得其中一张武将牌上的一个技能（X为场上的角色数）",
-						"失去一个通过【幻魂】获得的技能，然后令一名其他角色失去一个技能，直到其下个回合结束",
-					])
+					.set(
+						"prompt",
+						`幻魂：请选择一项（已持有${lib.skill.幻魂.getGained(player).length}个以此法获得的技能，配额为你的体力上限${player.maxHp}）`,
+					)
+					.set("choiceList", choices)
 					.set("ai", () => {
 						const evt = _status.event;
 						const evtControls = evt.controls || [];
@@ -3153,21 +3160,31 @@ const skills = {
 						const junk = lib.skill.幻魂
 							.getGained(me)
 							.some((s) => get.info(s) && get.info(s).charlotte);
-						// 体力告急：摸牌回复续航
-						if (me.hp <= 2) {
-							return "摸牌回复";
+						// 弃牌回复在扣体力前结算，可抵消1点伤害：
+						// 受伤者是友方且这1回复能救命（伤害≥体力）时最优先
+						if (
+							evtControls.includes("弃牌回复") &&
+							(victim === me || get.attitude(me, victim) > 0) &&
+							victim.hp <= trigger.num
+						) {
+							return "弃牌回复";
+						}
+						// 免费滚池优先（不再失去体力，优先扩池）
+						if (evtControls.includes("观看武将牌堆")) {
+							return "观看武将牌堆";
 						}
 						// 鸡肋技换封敌：稳赚
 						if (evtControls.includes("失技封敌") && junk) {
 							return "失技封敌";
 						}
-						// 牌堆技能来源更广，优先观看牌堆
-						if (evtControls.includes("观看武将牌堆")) {
-							return "观看武将牌堆";
+						// 受伤者是友方时弃牌回复净收益为正（回1血≈2分 > 弃1牌≈1分）
+						if (
+							evtControls.includes("弃牌回复") &&
+							(victim === me || get.attitude(me, victim) > 0)
+						) {
+							return "弃牌回复";
 						}
-						if (evtControls.includes("失技封敌")) {
-							return "失技封敌";
-						}
+						// 兜底摸牌
 						return evtControls[0];
 					})
 					.forResult();
@@ -3176,18 +3193,34 @@ const skills = {
 				}
 				choice = result.control;
 			}
-			if (choice === "摸牌回复") {
-				// 选项1：流程终点（满血时回复自动截断为0）
+			if (choice === "摸一张牌") {
+				// 选项1：摸牌兜底（每次受伤稳定+1牌）
 				await player.draw(1);
-				await player.recover(1);
 				return;
 			}
-			// 选项2自带体力条件：到这里必满足 hp>1，失去1点后至多降到1，不会致死
+			if (choice === "弃牌回复") {
+				// 选项2：选一张牌弃置，令受伤者回复一点体力——
+				// damageBegin4 时机在扣体力前，此回复可抵消1点伤害、抢救濒死边缘的友方
+				await player.chooseToDiscard(
+					"he",
+					true,
+					1,
+					"幻魂：弃一张牌，令" +
+						get.translation(victim) +
+						"回复一点体力",
+				);
+				if (victim.isIn()) {
+					await victim.recover(1);
+				}
+				return;
+			}
 			if (choice === "观看武将牌堆") {
-				await player.loseHp(1);
+				// 选项3：不再失去体力，直接观看牌堆
 				await lib.skill.幻魂.gainFromPile(player);
-			} else {
-				// 选项3：弃池技换封敌（同止涕：直到其下个回合结束）
+				return;
+			}
+			if (choice === "失技封敌") {
+				// 选项4：弃池技换封敌（同止涕：直到其下个回合结束）
 				const gained = lib.skill.幻魂.getGained(player);
 				const chosen = await player
 					.chooseButton(["幻魂：选择要失去的技能", [gained, "skill"]], true)
@@ -3295,12 +3328,14 @@ const skills = {
 					lib.character[name][3].some((i) => !player.hasSkill(i)),
 			);
 		},
-		// 当前拥有的、通过幻魂获得的技能（供幻魂③与幻生消耗）
+		// 当前拥有的、通过幻魂获得的技能（幻魂③配额判定与幻魂④/幻生消耗）
 		getGained(player) {
 			const pool = player.storage.幻魂_pool || [];
 			return pool.filter((i) => player.hasSkill(i));
 		},
 		// 记录“通过幻魂获得”的技能（数组池，失去时移除）
+		// 选项3配额按“当前持有数”计（getGained().length < 体力上限）：
+		// 弃技（幻魂④/幻生）可腾出配额，上限不随场上人数变化
 		recordGain(player, skills) {
 			if (!player.storage.幻魂_pool) {
 				player.storage.幻魂_pool = [];
@@ -3324,14 +3359,14 @@ const skills = {
 					(s) => target.hasSkill(s) && !lib.skill[s]?.charlotte,
 				);
 		},
-		// 幻魂选项2交互：观看剩余武将牌堆中的X个（X为场上角色数），
+		// 幻魂选项3交互：观看武将牌堆中的五张牌，
 		// 选择其中一名武将并获得其一个技能；仅观看，武将牌不离开牌堆
 		async gainFromPile(player) {
 			const candidates = lib.skill.幻魂.getPileCandidates(player);
 			if (!candidates.length) {
 				return;
 			}
-			const num = game.countPlayer();
+			const num = 5;
 			const list = candidates.randomGets(num);
 			const result = await player
 				.chooseButton(
@@ -3405,56 +3440,59 @@ const skills = {
 	},
 	"幻劫": {
 		audio: "ext:noname_diy:2",
-		locked: true,
-		forced: true,
 		trigger: {
 			// gameStart：游戏开始（同魂契/移魂的挂法）；roundEnd：一轮游戏结束时
 			// （round 事件收尾处 event.trigger("roundEnd")，content.js）
 			global: ["gameStart", "roundEnd"],
 		},
+		// "可以"的可选触发技：prompt 属性交由引擎自动弹 chooseBool（踩坑#31，同幻生）；
+		// AI 取舍用 check（content.js:3604：next2.ai = () => !check || check(...)）
+		prompt: "是否发动【幻劫】？",
 		filter(event, player) {
-			// 循环条件（手牌<上限）只门控"重复"，不门控首次，故 filter 无手牌/体力条件
 			return (
 				player.isIn() &&
 				game.hasPlayer((current) => current !== player)
 			);
 		},
+		check(trigger, player) {
+			// 掉1体力换1直伤：体力为1时发动会进入濒死，不打；无敌人可打也不发动
+			if (player.hp <= 1) {
+				return false;
+			}
+			return game.hasPlayer(
+				(current) =>
+					current !== player && get.attitude(player, current) < 0,
+			);
+		},
 		async content(event, trigger, player) {
-			// 循环：1点直伤 → 你与其各摸两张 → 手牌数<体力上限则重复；
-			// 每轮自己+2手牌单调增长，循环必然收敛（while 条件兜底自身中途死亡）
-			while (player.isIn()) {
-				const tResult = await player
-					.chooseTarget(
-						true,
-						"幻劫：对一名其他角色造成1点伤害，然后你与其各摸两张牌",
-						(card, player2, t) => player2 !== t,
-					)
-					.set("ai", (t) => {
-						const me = _status.event.player;
-						let att = -get.attitude(me, t);
-						if (t.hp <= 1) {
-							// 压制残血，优先斩杀
-							att += 2;
-						}
-						return att + Math.random();
-					})
-					.forResult();
-				if (!tResult?.bool || !tResult.targets?.length) {
-					return;
-				}
-				const target = tResult.targets[0];
-				if (target.isIn()) {
-					await target.damage(1, player);
-				}
-				// "你与其各摸两张牌"：目标已死亡则跳过其摸牌，自己照常摸
-				if (target.isIn()) {
-					await target.draw(1);
-				}
-				await player.draw(1);
-				// 重复条件：手牌数少于体力上限
-				if (player.countCards("h") >= player.maxHp) {
-					return;
-				}
+			// 先支付后结算：失去1点体力（loseHp 不是伤害，不触发幻魂）
+			await player.loseHp(1);
+			if (!player.isIn()) {
+				// 体力为1时强行发动且未被救回：已进入死亡流程，无从造成伤害
+				return;
+			}
+			const tResult = await player
+				.chooseTarget(
+					true,
+					"幻劫：对一名其他角色造成1点伤害",
+					(card, player2, t) => player2 !== t,
+				)
+				.set("ai", (t) => {
+					const me = _status.event.player;
+					let att = -get.attitude(me, t);
+					if (t.hp <= 1) {
+						// 压制残血，优先斩杀
+						att += 2;
+					}
+					return att + Math.random();
+				})
+				.forResult();
+			if (!tResult?.bool || !tResult.targets?.length) {
+				return;
+			}
+			const target = tResult.targets[0];
+			if (target.isIn()) {
+				await target.damage(1, player);
 			}
 		},
 		skill_id: "幻劫",

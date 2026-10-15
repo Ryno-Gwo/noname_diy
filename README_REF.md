@@ -93,7 +93,7 @@ export default function () {
 | 神冶（shen，4/4） | 冶武、炼刃、穷兵 | 武器栏增减经济 + 弃装备牌抉择（拿牌/伤害）+ 濒死保命 |
 | 神傀（shen，4/4） | 傀体、百战、移魂 | 傀儡机制：受击反制 + 被指定赚牌 + 锦囊到手即弃换续航 + 无限用牌 + 使用杀以体力为燃料 + 流离式目标转移 |
 | 武张飞（shen，4/4） | 恣胜（恣胜_effect）、显略、豪贤（豪贤_aura） | 点数3引擎：倍数≤i全档依次触发+1倍获得目标牌 + 依次展示博弈两分支+②上限+1（usable 动态标记限次） + 限定技光环（指定点数满档，X=显略上限） |
-| 神左慈（shen，4/4） | 幻魂、幻劫、幻生 | 技能池引擎：受伤/伤人三向抉择（摸牌回复/观堆滚池/弃池封敌）+ 游戏开始与轮末的直伤连击（伤一敌换双方补牌，循环至手牌达上限）+ 死亡时弃一个所得技复活濒死者 |
+| 神左慈（shen，4/4） | 幻魂、幻劫、幻生 | 技能池引擎：任意角色受伤四向抉择（摸牌/弃牌回复伤者/观堆滚池配额=体力上限看5张/弃池封敌）+ 游戏开始与轮末可选"失去1体力对一名其他角色造成1点伤害" + 死亡时弃一个所得技复活濒死者 |
 
 ---
 
@@ -802,47 +802,50 @@ export default function () {
 ### 2.10.0 幻魂
 
 **文案：**
-> 锁定技。当你受到来源不为自己的伤害或造成伤害时，你选择一项：1、摸一张牌并回复一点体力；2、若你的体力值大于1，你失去一点体力，然后观看剩余武将牌堆中的X个并获得其中一张武将牌上的一个技能（X为场上的角色数）；3、失去一个通过【幻魂】获得的技能，然后令一名其他角色失去一个技能，直到其下个回合结束。
+> 锁定技。一名角色受伤害时，你选择一项：1、摸一张牌；2、弃一张牌并令其回复一点体力；3、若你此法获得的技能数小于你的体力上限，你观看武将牌堆中的五张牌并获得其中一个技能；4、失去一个通过【幻魂】获得的技能，然后令一名其他角色失去一个技能直到其下个回合结束。
 
 **设计点：**
-1. 神左慈的"发动机"：受伤（来源不为自己）或伤人均触发，三选一：①摸牌回复（续航兜底）、②观堆滚池、③弃池技封敌。每次触发只选一次，无循环。
-2. 受伤侧排除自源伤害：火攻等自毁效果的一次伤害既算"受到"也算"造成"，受伤侧以 `event.source !== player` 屏蔽自源，避免同一次自伤触发两次（伤人侧照常触发一次）。
-3. 技能来源只有"剩余武将牌堆"：`initCharacterList` 已把场上角色剔出牌堆，两者天然不重叠；观看式复制（牌不离开牌堆，参考挈挟），不与化身（抽走式）争牌。
-4. 选项2自带条件"若你的体力值大于1"；选项3需池非空且有可封目标。不可行选项不进 controls；全不可行时仅剩选项1直接执行（百战式）。
-5. 与幻劫/幻生的闭环：幻魂攒的技能既是幻魂③的封敌弹药，也是幻生的复活燃料；幻劫的直伤又是幻魂的触发源——一轮连击可滚 N 次池。
+1. 神左慈的"发动机"：任意角色（含自己）受伤即触发，四选一：①摸牌（兜底）、②弃牌回复（护伤者）、③观堆滚池（免费拿技）、④弃池技封敌。每次触发只选一次，无循环。
+2. 单时机 global 挂法："一名角色"不再区分自己/他人——任意伤害事件只从受伤侧（damageBegin4）触发一次，自伤（火攻等）照常触发。幻劫的"失去体力"不是伤害，不触发幻魂。
+3. 选项2的回复在扣体力之前结算（damageBegin4 时机）：受伤者先回1点再挨打，等效抵消1点伤害——满血者无法回复，该选项自动隐藏；体力=伤害值时回1再扣恰好不再濒死。
+4. 技能来源只有"剩余武将牌堆"：`initCharacterList` 已把场上角色剔出牌堆，两者天然不重叠；观看式复制（牌不离开牌堆，参考挈挟），不与化身（抽走式）争牌。
+5. 选项3自带配额条件"此法获得的技能数<体力上限"（见设计点6）且牌堆有候选；选项2需有牌可弃且受伤者未满血；选项4需池非空且有可封目标。不可行选项不进 controls，choiceList 亦同步动态构建（不可行选项不显示文案）；全不可行时仅剩选项1直接执行（百战式）。
+6. 选项3配额=体力上限（固定口径，不再随场上人数缩水）：判定口径为"当前持有的所得技数"<体力上限——弃技（幻魂④/幻生）可腾出配额，至多回到体力上限个。
+7. 与幻劫/幻生的闭环：幻魂攒的技能既是幻魂④的封敌弹药，也是幻生的复活燃料；幻劫的直伤（每轮至多一次）仍会作为"一名角色受伤害"喂幻魂滚池。
 
 **实现要点：**
-- **触发**：`trigger:{player:"damageBegin4", source:"damageSource"}` 多时机（踩坑#8/#23）：filter 第三参 `name` 判时机。`damageBegin4` 侧判 `event.source !== player`（来源不为自己）；两时机均判 `event.num > 0`（0点伤害不算伤害；damageSource 在死亡结算后触发，不碍事）。`logTarget:"player"` 字符串式——两时机的 `trigger.player` 均为受伤者。`forced:true + locked:true`。
-- **单次抉择**：content 构建可行性 `options`：选项1恒可行；选项2需 `hp>1` 且牌堆有候选（`getPileCandidates`）；选项3需池非空且场上有 `banCandidates` 非空的其他角色。**仅剩选项1时直接执行不弹窗**（百战式，避免 choiceList 与单项按钮错位）；多项时 `chooseControl`（无 `cancel2`，锁定强制）+ choiceList 三条文案。
-- **选项3解除时机**（同止涕"下一个回合结束"，见踩坑#49/#51）：`disableSkill("幻魂", skill)` 挂 `disabledSkills`（触发/主动使用/mod 被动/skillTag 全失效），解除用 when 钩子 + **止涕式 filter 排除当前回合**：`.filter((evt) => evt != event.getParent("phase"))`——回合外封技→下一次 phaseEnd 即其下个回合结束；其回合内封技→顺延一回合（phaseEnd 不像 phaseBegin 天然无歧义，必须排除）。
+- **触发**：`trigger:{global:"damageBegin4"}`（"受伤时"=扣体力前，踩坑#8/#23 同源）：`trigger.player` 即受伤者，`logTarget:"player"` 字符串式弹泡指向对方。filter 判 `event.num > 0`（0点伤害不算伤害）且受伤者在场。`forced:true + locked:true`。
+- **单次抉择**：content 构建可行性 `options`：选项1恒可行；选项2需有牌可弃（`countCards("he")>0`）且受伤者未满血（`victim.hp < victim.maxHp`，满血回复无意义不进选项）；选项3需配额未满（`getGained(player).length < player.maxHp`）且牌堆有候选（`getPileCandidates`）；选项4需池非空且场上有 `banCandidates` 非空的其他角色。**仅剩选项1时直接执行不弹窗**（百战式，避免 choiceList 与单项按钮错位）；多项时 `chooseControl`（无 `cancel2`，锁定强制）+ choiceList 同步动态构建，prompt 附当前持有数与配额（体力上限）。
+- **选项2**：`chooseToDiscard("he", true, 1)` 弃一张牌（含装备区）→ `victim.recover(1)`——回复发生在扣体力前，等效减伤1点/抢救"体力=伤害值"的濒死边缘角色。
+- **选项4解除时机**（同止涕"下一个回合结束"，见踩坑#49/#51）：`disableSkill("幻魂", skill)` 挂 `disabledSkills`（触发/主动使用/mod 被动/skillTag 全失效），解除用 when 钩子 + **止涕式 filter 排除当前回合**：`.filter((evt) => evt != event.getParent("phase"))`——回合外封技→下一次 phaseEnd 即其下个回合结束；其回合内封技→顺延一回合（phaseEnd 不像 phaseBegin 天然无歧义，必须排除）。
 - **辅助函数挂 `lib.skill.幻魂`（幻魂/幻生共用）**：
   - `getSkills(target)`：取角色技能（兼容 name/name1/name2 三槽）。
-  - `getPileCandidates(player)`：`_status.characterlist`（未初始化则 `game.initCharacterList()`）中拥有"你可获得技能"的武将列表；随机取 X 个用 `candidates.randomGets(num)`（引擎数组扩展，自动截断越界）。
-  - `getGained(player)` / `recordGain(player, skills)` / `removeGained(player, skills)`：技能池 `player.storage.幻魂_pool = [技能名...]`，查询时再过 `hasSkill` 过滤——只列"当前拥有的"，失去后 `remove` 出池。
-  - `gainFromPile(player)`：**观看武将牌堆**（幻魂选项2专用；参考 onlyOL 挈挟 qiexie 的 characterlist 用法，但不移除武将牌）：`chooseButton([列表, "character"])`（内建武将按钮，hover 显示武将技能）选一名 → `chooseButton([技能, "skill"])` 选一个 → `addSkills` + 入池。
-  - `banCandidates(target)`：可封技候选（幻魂③专用）：`getSkills(target)` ∩ `target.hasSkill` ∩ 非 `charlotte`。
-- **AI**：`hp≤2` 优先选项1续航；有 `charlotte` 鸡肋技优先弃技封敌；否则优先观堆滚池。`ai.effect.target` 对持有幻魂的目标降伤害价值（`[1, -0.1]`，打他白喂触发）。
+  - `getPileCandidates(player)`：`_status.characterlist`（未初始化则 `game.initCharacterList()`）中拥有"你可获得技能"的武将列表；固定取5个用 `candidates.randomGets(5)`（引擎数组扩展，自动截断越界）。
+  - `getGained(player)` / `recordGain(player, skills)` / `removeGained(player, skills)`：技能池 `player.storage.幻魂_pool = [技能名...]`，查询时再过 `hasSkill` 过滤——只列"当前拥有的"，失去后 `remove` 出池。选项3配额判定即 `getGained(player).length`（持有数口径）与体力上限比较，见设计点6。
+  - `gainFromPile(player)`：**观看武将牌堆中的五张**（幻魂选项3专用；参考 onlyOL 挈挟 qiexie 的 characterlist 用法，但不移除武将牌）：`chooseButton([列表, "character"])`（内建武将按钮，hover 显示武将技能）选一名 → `chooseButton([技能, "skill"])` 选一个 → `addSkills` + 入池。
+  - `banCandidates(target)`：可封技候选（幻魂④专用）：`getSkills(target)` ∩ `target.hasSkill` ∩ 非 `charlotte`。
+- **AI**：受伤者是友方且这1回复能救命（`victim.hp ≤ trigger.num`）→ 优先选项2；否则优先选项3免费滚池；持 `charlotte` 鸡肋技优先选项4封敌；友方受伤时选项2仍优于摸牌；兜底选项1摸牌。`ai.effect.target` 对持有幻魂的目标降伤害价值（`[1, -0.1]`，打他白喂触发）。
 
-**关键 API：** `damageBegin4` / `damageSource` / `trigger.num` / `logTarget` 字符串式 / `forced` / `locked` / `chooseControl` / `loseHp` / `draw` / `recover` / `disableSkill(禁用者, 技)` / `when({player:"phaseEnd"}, false) + filter` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `chooseButton([list, "character"])` / `addSkills` / `hasSkill` / `storage` / `ai.effect.target`。
+**关键 API：** `global:"damageBegin4"` / `trigger.num` / `logTarget` 字符串式 / `forced` / `locked` / `chooseControl` / `chooseToDiscard` / `draw` / `recover` / `disableSkill(禁用者, 技)` / `when({player:"phaseEnd"}, false) + filter` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `chooseButton([list, "character"])` / `addSkills` / `hasSkill` / `storage` / `ai.effect.target`。
 
 ---
 
 ### 2.10.1 幻劫
 
 **文案：**
-> 锁定技。游戏开始或当一轮游戏结束时，你对一名其他角色造成一点伤害，然后你与其各摸两张牌，若你的手牌数少于体力上限，你重复此流程。
+> 游戏开始或当一轮游戏结束时，你可以失去一点体力并对一名其他角色造成一点伤害。
 
 **设计点：**
-1. 定时连击引擎：游戏开始、每轮结束各一波"1点直伤 + 双方各摸2"，循环条件"手牌数<体力上限"只门控重复、不门控首次——满手牌时也至少打一次。自己手牌每轮+2，循环必然收敛。
-2. 双刃性：被打的敌人每次也摸2张——伤害换补牌，选目标要权衡（打残血可斩杀，打发育型敌人反喂资源）。
-3. 与幻魂咬合：每轮连击造成 N 次伤害就触发 N 次幻魂（伤人侧），边打边滚池。
+1. 定时直伤引擎：游戏开始、每轮结束各一次"以1体力换1直伤"的可选时机，不再循环、不再摸牌交牌——轻量补伤，按需取舍。
+2. 先支付后结算：先失去1点体力（loseHp 非伤害，不触发幻魂），再对选定的目标造成1点伤害。体力为1时强行发动会进入濒死（规则允许，AI 永不为之）；未被救回则死亡流程中，无从结算伤害。
+3. 与幻魂咬合：对目标造成的1点伤害即"一名角色受伤害"，仍会喂左慈自己的幻魂滚池——每轮至多一次的直伤稳定换1次幻魂触发。
 
 **实现要点：**
-- **触发**：`trigger:{global:["gameStart","roundEnd"]}`——`gameStart` 同魂契挂法；`roundEnd` 在 round 事件收尾处触发（content.js），即"一轮游戏结束时"的标准挂点。filter 仅判 `player.isIn()` 且场上有其他角色（无体力/手牌条件，见设计点1）。
-- **循环**：content 用 `while (player.isIn())`：`chooseTarget(true, ...)`（强制）选一名其他角色 → `target.damage(1, player)` → 目标存活才 `target.draw(2)`、自己恒 `draw(2)` → `countCards("h") >= maxHp` 则 `return` 结束。每轮自己+2手牌单调增长，必然收敛；`while` 条件兜底自身中途死亡（反伤类技能）。
-- **AI**：chooseTarget 优先残血（`hp≤1` 加权斩杀），负态度打底。
+- **触发**：`trigger:{global:["gameStart","roundEnd"]}`——`gameStart` 同魂契挂法；`roundEnd` 在 round 事件收尾处触发（content.js），即"一轮游戏结束时"的标准挂点。filter 判 `player.isIn()` 且场上有其他角色。
+- **可选触发**：不再 locked/forced；挂 `prompt:"是否发动【幻劫】？"` 由引擎自动弹 chooseBool（踩坑#31，同幻生），AI 取舍用 `check`（content.js:3604：`next2.ai = () => !check || check(...)`）——体力≤1 恒不打（发动即濒死），且需场上有敌对角色（`get.attitude < 0`）。
+- **content**：`loseHp(1)` → `isIn()` 兜底（未被救回则终止）→ `chooseTarget(true, ...)` 强制选一名其他角色 → `target.damage(1, player)`。
 
-**关键 API：** `gameStart` / `roundEnd` / `chooseTarget(true)` / `target.damage(1, player)` / `draw(2)` / `countCards("h")` / `maxHp`。
+**关键 API：** `gameStart` / `roundEnd` / `prompt` 属性自动 chooseBool / `check` / `loseHp(1)` / `chooseTarget(true)` / `target.damage(1, player)`。
 
 ---
 
@@ -854,7 +857,7 @@ export default function () {
 **设计点：**
 1. 复活引擎（"死亡时"的口径同夺魂）：技能池即复活燃料——弃一个所得技，把一名濒死角色（含自己）从死亡边缘拉回至1点体力。对象不限友方，文案只写"一名角色"。
 2. 挂 `_saveAfter` 而非 `death`：求桃失败、正式 die 之前，濒死者仍在场，`recoverTo(1)` 即可阻断后续 die——不产生"死而复生"的结算残渣（击杀奖惩、阵亡离场均未发生）。
-3. 只换一个技能："一个"而非"任意个"，复活单价固定；池空时技能整体失效（filter 拦）。
+3. 只换一个技能："一个"而非"任意个"，复活单价固定；池空时技能整体失效（filter 拦）。消耗使幻魂③持有技数-1（腾出配额），与幻魂④同源（见2.10.0设计点6）。
 
 **实现要点：**
 - **触发**：`trigger:{global:"_saveAfter"}`（同夺魂，踩坑#3：濒死角色在 `event.dying`）。filter 判 `event.dying` 存在且 `isIn()`/`isDying()`（若已被其他技能救回则不再触发），另判池内有当前拥有的技能。非锁定（"可以"）——设 `prompt` 属性由引擎自动弹 chooseBool（踩坑#31），`logTarget:"dying"`；AI 取舍用 `check` 函数（content.js:3604：`next2.ai = () => !check || check(...)`，本引擎触发询问不吃 `ai.result.player`）：自己濒死必救，友军救，敌方不救。
