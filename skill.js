@@ -102,15 +102,15 @@ const skills = {
 					lib.character[name][3].some((i) => !player.hasSkill(i)),
 			);
 		},
-		// 选项1交互：观看武将牌堆中的五张牌，选择其中一名武将并获得其一个技能；
+		// 选项1交互：观看武将牌堆中的X张牌（num），选择其中一名武将并获得其一个技能；
 		// 仅观看，武将牌不离开牌堆（同幻魂选项3）；来源记为哨兵字符串"武将牌堆"
-		// （不与任何玩家对象相等，getStolenSkills 照常纳入、止涕不再读取来源故无影响）
-		async gainFromPile(player) {
+		// （不与任何玩家对象相等，getStolenSkills 照常纳入）
+		async gainFromPile(player, num = 5) {
 			const candidates = lib.skill.夺魂.getPileCandidates(player);
 			if (!candidates.length) {
 				return;
 			}
-			const list = candidates.randomGets(5);
+			const list = candidates.randomGets(num);
 			const result = await player
 				.chooseButton(
 					[
@@ -231,7 +231,7 @@ const skills = {
 		async content(event, trigger, player) {
 			const target = trigger.dying;
 			const stolenSkills = lib.skill.夺魂.getStolenSkills(player);
-			// 二选一（可取消）；任一选项执行后濒死角色回复体力至1点
+			// 二选一（可取消）；任一选项执行后濒死角色回复体力值至1点
 			const controls = [];
 			if (
 				player.maxHp > 1 &&
@@ -240,18 +240,20 @@ const skills = {
 				controls.push("减体力上限并获得技能");
 			}
 			if (stolenSkills.length) {
-				controls.push("失去技能并造成伤害");
+				controls.push("失去技能并摸两张牌");
 			}
 			if (!controls.length) {
 				return;
 			}
 			controls.push("cancel2");
+			// X为场上角色数且至少为3（观看武将牌堆的张数）
+			const pileNum = Math.max(3, game.countPlayer());
 			const costResult = await player
 				.chooseControl(controls)
 				.set("prompt", get.prompt("夺魂", target))
 				.set(
 					"prompt2",
-					`濒死角色：${get.translation(target)}。选择一项：①减体力上限并观看武将牌堆的5张牌，然后你获得其中一个技能，令其回复体力至1点；②失去一个来源于其他角色或武将牌堆的技能，然后对一名其他角色造成一点伤害，令其回复体力至1点。`,
+					`濒死角色：${get.translation(target)}。选择一项：①若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的${pileNum}张牌并获得其中一个技能；②失去一个来源于其他角色或武将牌堆的技能并摸两张牌。选择一项后令其回复体力值至1点。`,
 				)
 				.set("ai", () => {
 					const player2 = _status.event.player;
@@ -267,8 +269,8 @@ const skills = {
 					) {
 						return "减体力上限并获得技能";
 					}
-					if (evtControls.includes("失去技能并造成伤害")) {
-						return "失去技能并造成伤害";
+					if (evtControls.includes("失去技能并摸两张牌")) {
+						return "失去技能并摸两张牌";
 					}
 					if (evtControls.includes("减体力上限并获得技能")) {
 						return "减体力上限并获得技能";
@@ -280,11 +282,11 @@ const skills = {
 				return;
 			}
 			if (costResult.control === "减体力上限并获得技能") {
-				// 选项1：减体力上限并观看武将牌堆的5张牌，获得其中一个技能
+				// 选项1：减少1点体力上限，观看武将牌堆的X张牌并获得其中一个技能
 				await player.loseMaxHp();
-				await lib.skill.夺魂.gainFromPile(player);
+				await lib.skill.夺魂.gainFromPile(player, pileNum);
 			} else {
-				// 选项2：失去一个来源于其他角色或武将牌堆的技能，然后对一名其他角色造成一点伤害
+				// 选项2：失去一个来源于其他角色或武将牌堆的技能并摸两张牌
 				const chosen = await player
 					.chooseButton([
 						"请选择要失去的来源于其他角色或武将牌堆的技能",
@@ -307,27 +309,92 @@ const skills = {
 						delete player.storage.夺魂_sources[skill];
 					}
 				}
-				const dmgResult = await player
-					.chooseTarget(
-						true,
-						"对一名其他角色造成一点伤害",
-						(card, player2, t) => player2 !== t,
-					)
-					.set("ai", (t) => {
-						const player2 = _status.event.player;
-						return -get.attitude(player2, t) + Math.random();
-					})
-					.forResult();
-				if (dmgResult.bool && dmgResult.targets.length) {
-					const dmgTarget = dmgResult.targets[0];
-					player.line(dmgTarget);
-					await dmgTarget.damage(1, player);
-				}
+				await player.draw(2);
 			}
-			// 濒死角色回复体力至1点（此刻仍在死亡结算前，recoverTo(1) 即可阻止后续 die）
+			// 濒死角色回复体力值至1点（此刻仍在死亡结算前，recoverTo(1) 即可阻止后续 die）
 			await target.recoverTo(1);
 		},
 		skill_id: "夺魂",
+		_priority: 0,
+	},
+	"迅袭": {
+		audio: "ext:noname_diy:2",
+		trigger: {
+			// "一名其他角色使用牌对唯一目标造成的伤害结算结束后"：伤害结算后时机，global 单时机挂法
+			// （damageAfter 由事件系统在 damage 事件 content 完成后触发，濒死结算已结束——
+			// 事后追责窗口；注意与止涕的事件内时机 damageSource 区分）
+			global: "damageAfter",
+		},
+		// "可以"的可选触发技：prompt 属性交由引擎自动弹 chooseBool（踩坑#31，同幻劫/幻生）；
+		// AI 取舍用 check（content.js:3604：next2.ai = () => !check || check(...)）
+		prompt: "是否发动【迅袭】？",
+		filter(event, player) {
+			// 代价校验：上限>1（减1后仍≥1）
+			if (player.maxHp <= 1) {
+				return false;
+			}
+			// "一名其他角色使用牌"：伤害须有来源，来源非自己且存活
+			const source = event.source;
+			if (!source || source === player || !source.isIn()) {
+				return false;
+			}
+			// "使用牌"：须有牌（技能直伤 event.card 为空）
+			if (!event.card) {
+				return false;
+			}
+			// "对唯一目标"：该牌使用事件的目标数为1（南蛮/万箭等AOE、方天画戟多方杀均排除）。
+			// ⚠️ getParent 按名找不到父事件时返回空对象 {}（truthy），故必须用
+			// Array.isArray(useCard.targets) 判定，不能只判 useCard 真值
+			const useCard = event.getParent("useCard");
+			if (
+				!useCard ||
+				!Array.isArray(useCard.targets) ||
+				useCard.targets.length !== 1
+			) {
+				return false;
+			}
+			// 0点伤害不算"造成伤害"（同幻魂）
+			return event.num > 0;
+		},
+		check(trigger, player) {
+			// 付1上限补1刀：来源或目标里有敌人才值得发动
+			const source = trigger.source;
+			const victim = trigger.player;
+			return (
+				get.attitude(player, source) < 0 ||
+				(victim && get.attitude(player, victim) < 0)
+			);
+		},
+		async content(event, trigger, player) {
+			// "对其或目标"：伤害来源 或 受伤目标（去重——闪电自伤时二者合一；均限存活，
+			// 结算后受伤者可能已死于该伤害，此时仅可追责来源）
+			const candidates = [...new Set([trigger.source, trigger.player])].filter(
+				(t) => t && t.isIn(),
+			);
+			if (!candidates.length) {
+				return;
+			}
+			// 先支付后结算：减少一点体力上限
+			await player.loseMaxHp();
+			const result = await player
+				.chooseTarget(
+					true,
+					"迅袭：对其或目标造成一点伤害",
+					(card, player2, t) => candidates.includes(t),
+				)
+				.set("ai", (t) => {
+					const me = _status.event.player;
+					return -get.attitude(me, t) + Math.random();
+				})
+				.forResult();
+			if (!result?.bool || !result.targets?.length) {
+				return;
+			}
+			const target = result.targets[0];
+			player.line(target);
+			await target.damage(1, player);
+		},
+		skill_id: "迅袭",
 		_priority: 0,
 	},
 	"止涕": {
@@ -340,7 +407,7 @@ const skills = {
 			const target = event.player;
 			// 不判目标存活：damageSource 在死亡结算之后触发（damage 事件步骤：
 			// changeHp → dying/death → damageSource），两个分支都应对击杀成立。
-			// 2026-10 三次改版：造成伤害即触发，无条件二选一（加上限 / 封技）
+			// 2026-10 三次改版：造成伤害即触发，无条件二选一（上限/摸牌 / 封技）
 			if (!target || target === player || !(event.num > 0)) {
 				return false;
 			}
@@ -362,19 +429,32 @@ const skills = {
 								!lib.skill[s]?.charlotte,
 						)
 				: [];
+			// 选项1：若你的体力上限小于场上的角色数，你增加一体力上限，否则你摸一张牌
+			// （加在自己身上，杀死目标时同样生效；封顶与否决定弹窗首选项文案）
+			const applyOption1 = async () => {
+				if (player.maxHp < game.countPlayer()) {
+					await player.gainMaxHp();
+				} else {
+					await player.draw(1);
+				}
+			};
+			const maxHpCapped = player.maxHp >= game.countPlayer();
+			const option1Label = maxHpCapped ? "摸一张牌" : "增加体力上限";
 			// 二选一；选项2不可行（目标已死/无可封技）时仅剩选项1，直接执行不询问
 			if (banSkills.length > 0) {
 				const result = await player
-					.chooseControl(["增加体力上限", "令其失去技能"])
+					.chooseControl([option1Label, "令其失去技能"])
 					.set("prompt", get.prompt(event.name, target))
 					.set("choiceList", [
-						`增加${get.cnNumber(trigger.num)}点体力上限`,
+						maxHpCapped
+							? "摸一张牌（你的体力上限已不小于场上角色数）"
+							: "增加一体力上限",
 						`令${get.translation(target)}失去一个技能，直到其下一个回合结束`,
 					])
 					.set("ai", () => {
 						const me = _status.event.player;
 						const tgt = _status.event.getTrigger().player;
-						// 友方不封技；敌方持有combo技时封技压制优先，否则走上限成长
+						// 友方不封技；敌方持有combo技时封技压制优先，否则走选项1（上限成长或摸牌）
 						if (get.attitude(me, tgt) < 0) {
 							const combo = banSkills.some(
 								(s) =>
@@ -382,18 +462,17 @@ const skills = {
 									get.info(s).ai &&
 									get.info(s).ai.combo,
 							);
-							return combo ? "令其失去技能" : "增加体力上限";
+							return combo ? "令其失去技能" : option1Label;
 						}
-						return "增加体力上限";
+						return option1Label;
 					})
 					.forResult();
 				if (result?.control !== "令其失去技能") {
-					await player.gainMaxHp(trigger.num);
+					await applyOption1();
 					return;
 				}
 			} else {
-				// 选项1：增加伤害值点体力上限（加在自己身上，杀死目标时同样生效）
-				await player.gainMaxHp(trigger.num);
+				await applyOption1();
 				return;
 			}
 			const chosen = await player
@@ -439,7 +518,7 @@ const skills = {
 		ai: {
 			effect: {
 				target(card, player, target, current) {
-					// 止涕强制触发：对其他角色造成伤害必有收益（上限成长或封技），伤害牌价值提升
+					// 止涕强制触发：对其他角色造成伤害必有收益（上限/摸牌或封技），伤害牌价值提升
 					if (target !== player && get.tag(card, "damage") > 0) {
 						return current + 0.3;
 					}

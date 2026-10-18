@@ -85,7 +85,7 @@ export default function () {
 
 | 角色 | 技能（含附属） | 定位 / 主题 |
 |------|----------------|------------|
-| 神张辽（shen，1/5） | 魂契、夺魂、止涕 | 体力上限↔技能的资源流转（回合开始偷技 + 死亡时观武将牌堆取技）+ 打伤害换上限/封技双重压制 |
+| 神张辽（shen，1/5） | 魂契、夺魂、迅袭、止涕 | 体力上限↔技能/手牌的资源流转（回合开始偷技 + 死亡时观武将牌堆取技/丢技摸2）+ 迅袭减上限补刀 + 打伤害换上限/封技 |
 | 神曹操（shen，3/3） | 归訫（归訫2/归訫_put/归訫_use）、飛影 | 卖血 + 标记牌（扩展区）+ 虚拟用牌 |
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
@@ -269,22 +269,21 @@ export default function () {
 ### 2.1.1 夺魂
 
 **文案：**
-> 一名角色死亡时，若你：1、体力上限大于1，你可以减少1点体力上限并观看武将牌堆的5张牌，然后你获得其中一个技能；2、拥有至少1个来源于其他角色或武将牌堆的技能，你可以失去一个来源于其他角色或武将牌堆的技能，然后对一名其他角色造成一点伤害。若如此做，你令其回复体力至1点。
+> 一名角色死亡时，你可以选择一项并令其回复体力值至1点：1、若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的X张牌并获得其中一个技能（X为场上角色数且至少为3）；2、失去一个来源于其他角色或武将牌堆的技能并摸两张牌。
 
 **设计点：**
 1. 原情况A（gameStart 减上限偷技）并入魂契③并改为强制发动（不再付上限代价）；本技能只剩"死亡时救场"一个触发。
-2. **救场（_saveAfter）**：求桃失败后兜底，代价二选一——**减上限观武将牌堆取技**（2026-10 四次改版：参考神左慈【幻魂】选项3，从"偷一名其他角色的技能"改为"观武将牌堆取技"，来源记哨兵字符串）或**丢一个来源技（角色来源或武将牌堆来源均可）+ 对一名其他角色造成一点伤害**，任一选项执行后濒死角色回复至1点。
-3. 选项2的"令其他角色失去技能"改为"对一名其他角色造成一点伤害"（2026-09 三次改版）：封技不再由夺魂直接执行，而是由该伤害经止涕（`damageSource` 强制触发）落地，夺魂只负责付代价与打伤害。
+2. **救场（_saveAfter）**：求桃失败后兜底，"选择一项并令其回复体力值至1点"——**减上限观武将牌堆取技**（X = 场上角色数且至少为3；2026-10 四次改版：参考神左慈【幻魂】选项3，从"偷一名其他角色的技能"改为"观武将牌堆取技"，来源记哨兵字符串）或**丢一个来源技（角色来源或武将牌堆来源均可）并摸两张牌**（2026-10 五次改版：选项2从"对一名其他角色造成一点伤害"改为"摸两张牌"，纯收益）。
+3. 选项2摸牌为纯收益，不再经伤害联动止涕；救友军成本更低，救自己（自杀式濒死）同样成立。
 4. 选项1可行性 = 上限>1 且武将牌堆有你可获得的技能；选项2可行性 = 持有至少1个来源技（角色来源或武将牌堆来源）。两者皆不可行时天然安全锁。
 
 **实现要点：**
 - **触发**：`trigger:{global:"_saveAfter"}`，`forced:true` + `locked:true`。filter 判 `event.dying.isIn() && event.dying.isDying()`，不排除自己（可自救）；选项1可行性并入 filter（`maxHp>1 && getPileCandidates().length>0`），避免空弹泡。
 - **⚠️ 不能用 `group`**：若用 `group:["夺魂_rescue"]` 分离救人逻辑，引擎会用子技能的 trigger 覆盖主技能的 trigger（见踩坑记录#28）。
-- **流程**：`chooseControl(["减体力上限并获得技能", "失去技能并造成伤害", "cancel2"])` → 对应效果 → `recoverTo(1)`。
-  - 选项1：`loseMaxHp` → `await lib.skill.夺魂.gainFromPile(player)`（同幻魂选项3：`getPileCandidates` → `randomGets(5)` → `chooseButton([list,"character"])` 选武将 → `chooseButton([skills,"skill"])` 选技能 → `addSkills` → 来源记哨兵字符串）。
-  - 选项2：`chooseButton` 选要失去的来源技 → `removeSkill` + `delete 夺魂_sources` → `chooseTarget`（任意其他角色）→ `await dmgTarget.damage(1, player)`（技能直伤，来源为自己）。AI 选好感度最低者。
-- **止涕联动**：`damage(1, player)` 的 `damageSource` 时机强制触发止涕——无条件二选一（加上限/封技）。目标若被此伤害打死，止涕仍触发（踩坑#48），封技部分由其 `isIn()` 守卫自动跳过。
-- **复活**：`await target.recoverTo(1)`（在 `_saveAfter` 内拉回 1 血即可阻止后续 die；两选项共用——"若如此做"任一选项执行即成立）。伤害目标也可以合法选到濒死角色本身：对已濒死者再造成伤害不会嵌套新一轮求桃（dying 事件幂等，见踩坑#50），随后 `recoverTo(1)` 照常救回。
+- **流程**：`chooseControl(["减体力上限并获得技能", "失去技能并摸两张牌", "cancel2"])` → 对应效果 → `recoverTo(1)`。
+  - 选项1：`loseMaxHp` → `await lib.skill.夺魂.gainFromPile(player, pileNum)`，`pileNum = Math.max(3, game.countPlayer())`（X = 场上角色数且至少为3；`randomGets` 自动截断越界）。
+  - 选项2：`chooseButton` 选要失去的来源技 → `removeSkill` + `delete 夺魂_sources` → `draw(2)`。
+- **复活**：`await target.recoverTo(1)`（在 `_saveAfter` 内拉回 1 血即可阻止后续 die；两选项共用——"选择一项后"任一选项执行即成立）。
 - **偷技辅助 `stealSkill(player)`**（魂契③专用）：强制 `chooseTarget`（其他角色 ∩ 有你未持有的技能）→ 强制 `chooseButton` 选技能（AI 避开 charlotte 鸡肋技）→ `addSkills` → 逐技写入 `player.storage.夺魂_sources[技能] = 来源角色`。
 - **观堆取技辅助 `gainFromPile(player)`**（选项1专用，同幻魂选项3但不入幻魂池）：候选 = 剩余武将牌堆中拥有"你可获得技能"的武将（`_status.characterlist`，未初始化则 `game.initCharacterList()`，场上角色已被剔出牌堆）；来源记哨兵字符串，不与任何玩家对象相等，`getStolenSkills` 的 `map[skill]!==player` 判定照常纳入。
 - **技能来源追踪**：`player.storage.夺魂_sources = {技能名: 来源角色或"武将牌堆"}`；获得时写入，失去时 `delete`。
@@ -293,34 +292,54 @@ export default function () {
   - `getStolenSkills(player)`：`Object.keys(map).filter(s => map[s]!==player && player.hasSkill(s))` —— 当前拥有的"来源技能"（角色来源 + 武将牌堆来源）
   - `stealSkill(player)`：偷技交互（选目标 → 选技能 → 记录来源）
   - `getPileCandidates(player)`：剩余武将牌堆中拥有"你可获得技能"的武将列表（同幻魂.getPileCandidates）
-  - `gainFromPile(player)`：观堆取技交互（观5张 → 选武将 → 选技能 → 记录哨兵来源）
-- **AI**：对濒死角色好感度 ≤0 则取消；上限>2 优先扣上限，否则丢来源技能（优先丢 `info.charlotte` 的鸡肋技）；伤害目标选好感度最低者。
+  - `gainFromPile(player, num = 5)`：观堆取技交互（观X张 → 选武将 → 选技能 → 记录哨兵来源）
+- **AI**：对濒死角色好感度 ≤0 则取消（救自己除外）；上限>2 优先扣上限，否则丢来源技能（优先丢 `info.charlotte` 的鸡肋技）+ 摸2。
 
-**关键 API：** `forced` / `locked` / `_saveAfter` / `chooseControl` / `chooseTarget` / `chooseButton([... , "skill"])` / `chooseButton([list, "character"])` / `loseMaxHp` / `target.damage(1, player)`（技能直伤） / `recoverTo` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `line` / `get.prompt` / `get.attitude` / `game.filterPlayer` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `_status.event.getTrigger()`。
+**关键 API：** `forced` / `locked` / `_saveAfter` / `chooseControl` / `chooseButton([... , "skill"])` / `chooseButton([list, "character"])` / `loseMaxHp` / `draw` / `game.countPlayer()` / `recoverTo` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `get.prompt` / `get.attitude` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `_status.event.getTrigger()`。
 
 ---
 
-### 2.1.2 止涕
+### 2.1.2 迅袭
 
 **文案：**
-> 当你对其他角色造成伤害时，你选择一项：1、增加伤害值点体力上限；2、令其失去一个技能直到其下一个回合结束。
+> 一名其他角色使用牌对唯一目标造成的伤害结算结束后，若你的体力上限大于1，你可以减少一点体力上限，然后对其或目标造成一点伤害。
 
 **设计点：**
-1. 无条件二选一（2026-10 三次改版，原"有来源技→封技/无来源技→加上限"的双分支互斥移除）：造成伤害即触发，**增加伤害值点体力上限**或**封技**任选其一。
-2. 上限成长改为按伤害值计（原为固定1点）：打多少伤害就能换多少上限，止涕成为上限成长的核心引擎——上限即手牌上限（魂契②）、即夺魂观堆的发动资源（夺魂①），成长直接放大全技能收益。
+1. 上限换直伤的事后追责技（2026-10 二次改版：时机从"造成伤害时"改为"伤害结算结束后"，仍限定"使用牌"）：任意其他角色用牌对唯一目标造成伤害并结算完毕后，付1上限补1刀——可打伤害来源（惩罚出牌者），也可打受伤目标（补刀/压制）。结算后才触发，即使该伤害击杀了目标，仍可对来源追责。
+2. 与止涕联动：迅袭的直伤来源为自己、目标是其他角色，必触发止涕（加上限回补或封技）——上限支出可经止涕选项1回补，形成"减1上限→打1伤害→回1上限"的循环。
+3. 可选触发（"可以"）：AI 只在来源或目标为敌方时才值得付上限。
+
+**实现要点：**
+- **触发**：`global:"damageAfter"`（伤害结算后时机——damage 事件 content 完成后由事件系统 afterTrigger 触发，濒死结算已结束；官方 boss/chess/single 等模式广泛使用；注意与止涕的事件内时机 `damageSource` 区分），`prompt` 属性交由引擎自动弹 chooseBool（踩坑#31），AI 用 `check`。
+- **filter 链**：`maxHp > 1`（代价校验）→ `event.source` 存在、非自己且存活（"一名其他角色使用牌"）→ `event.card` 存在（"使用牌"，技能直伤无牌不算）→ `getParent("useCard")` 存在且 `targets.length === 1`（"对唯一目标"，南蛮/万箭等 AOE、方天画戟多方杀均排除）→ `event.num > 0`（0点伤害不算"造成伤害"，同幻魂）。⚠️ `getParent` 按名找不到父事件时返回**空对象 `{}`（truthy）**（`gameEvent.js` 的 `toreturn = forced ? void 0 : {}`），故用 `!useCard || !Array.isArray(useCard.targets)` 判定，不能只判 `useCard` 真值。
+- **content**：候选 = `[source, victim]` 去重（闪电自伤时二者合一）∩ 存活（结算后受伤者可能已死于该伤害，此时仅剩来源可追责；候选为空直接返回不支付）→ `loseMaxHp()`（先支付后结算）→ 强制 `chooseTarget`（候选内）→ `target.damage(1, player)`（技能直伤，来源为自己）。
+- **AI**：`check` 判来源或目标好感度 <0 才发动；chooseTarget 选好感度最低者。
+
+**关键 API：** `global:"damageAfter"` / `trigger.source` / `trigger.card` / `trigger.num` / `getParent("useCard")` / `prompt` + `check`（可选触发技） / `loseMaxHp` / `chooseTarget` / `target.damage(1, player)` / `line` / `get.attitude`。
+
+---
+
+### 2.1.3 止涕
+
+**文案：**
+> 当对其他角色造成伤害时，你选择一项：1、若你的体力上限小于场上的角色数，你增加一体力上限，否则你摸一张牌；2、令其失去一个技能直到其下一个回合结束。
+
+**设计点：**
+1. 无条件二选一（2026-10 三次改版，原"有来源技→封技/无来源技→加上限"的双分支互斥移除）：造成伤害即触发，**选项1（上限/摸牌）**或**封技**任选其一。
+2. 上限成长固定为1点/次但有封顶（2026-10 六次改版：上限 < 场上角色数才涨，否则改摸1牌）：未封顶时止涕是上限成长的核心引擎——上限即手牌上限（魂契②）、即夺魂观堆的发动资源（夺魂①）；封顶后自动转化为过牌收益，避免无限堆上限。
 3. 封技不再有来源限制：任意伤害都可封锁目标任意技能（非 charlotte）直到其下一个回合结束，从"惩罚被偷过技能的目标"变为通用压制。
 4. 强制触发（`forced:true`）：造成伤害即进入 content，"你选择一项"无取消项；选项2不可行（目标已死/无可封技）时仅剩选项1，直接执行不询问（幻魂式单选项直执行）。
 
 **实现要点：**
 - **触发**：`source:"damageSource"` + `forced:true`，`filter` 判目标≠自己且 `event.num > 0`。⚠️ **不判目标存活**——`damageSource` 在死亡结算之后触发（damage 事件步骤：changeHp → dying/death → damageSource），两个分支都应对击杀成立（见踩坑#48）。
 - **可行性判定**：content 开头算失效池——`target.isIn()`（尸体豁免——死亡角色不再是效果对象，此时仅剩选项1）+ 失效池非空；失效池：`lib.skill.夺魂.getSkills(target)` ∩ `target.hasSkill` ∩ 非 `charlotte`（`hasSkill` 经 `getSkills` 过滤 `disabledSkills`，已被封住的技能自然排除，无需另查失效标记）。
-- **询问**：双选项可行时 `chooseControl(["增加体力上限", "令其失去技能"])` + `choiceList`（无 cancel，"你选择一项"）；AI 友方走上限、敌方持有 `info.ai.combo` 技能时封技否则走上限。
-- **选项1**：`await player.gainMaxHp(trigger.num)`——X = 本次伤害值（加在自己身上，对尸体同样生效）。
+- **询问**：双选项可行时 `chooseControl([option1Label, "令其失去技能"])` + `choiceList`（无 cancel，"你选择一项"）；首选项标签动态——`maxHp < game.countPlayer()` 时为"增加体力上限"，封顶时为"摸一张牌"；AI 友方走选项1、敌方持有 `info.ai.combo` 技能时封技否则走选项1。
+- **选项1**：`player.maxHp < game.countPlayer()` → `await player.gainMaxHp()`，否则 → `await player.draw(1)`（加在自己身上，对尸体同样生效；封顶判定在执行时实时计算）。
 - **"直到其下一个回合结束"（2026-09 三次改版：tempBanSkill → disableSkill）**：`target.disableSkill("止涕", skill)` 把技能挂进 `disabledSkills`，经 `getSkills` 过滤后**触发、主动使用、mod 被动、skillTag、依赖 hasSkill 的 global 子技一并失效**——旧 `tempBanSkill` 的 `temp_ban_` 只覆盖 filterTrigger/filterEnable 两个显式检查点，mod/skillTag/global 子技（如归訫的归訫_put）会"封了照用"（实测踩坑，见#51）。解除用官方 dcsbzuojun 式 when 钩子：`target.when({player:"phaseEnd"}, false).filter(evt => evt != event.getParent("phase")).assign({firstDo:true}).step(player2.enableSkill("止涕")).finish()`——在其自己的回合结束触发，filter 跳过封技发生时所在的当前回合（若在其回合内造成伤害则顺延到其下下回合，严格等于"其下一个回合结束"，见踩坑#49）；自定义 filter 在排布阶段判定，被跳过不消耗 `when` 的一次性守卫（content.ts 仅在触发事件真正创建后才置 `triggered`）。⚠️ `disableSkill` 首次禁用若技能同时有 `ondisable`+`onremove` 会执行破坏性清理——本扩展与常规官方技均无 `ondisable`，安全。
-- **AI**：`ai.effect.target` 对任意目标提高伤害牌价值（`current + 0.3`——上限成长或封技必有收益）。
+- **AI**：`ai.effect.target` 对任意目标提高伤害牌价值（`current + 0.3`——上限/摸牌或封技必有收益）。
 - 旧三标记（止戈/血俎/失魂）与 `止涕_mark` 展示技能已随前版移除；`countFromSource` 辅助已随本版移除（止涕不再读取技能来源）。
 
-**关键 API：** `forced` / `damageSource` / `logTarget` / `chooseControl` / `choiceList` / `chooseButton([... , "skill"])` / `gainMaxHp(trigger.num)` / `disableSkill(禁用者, 技)` / `enableSkill(禁用者)` / `when({player:"phaseEnd"}, false)` / `isIn` / `line`。
+**关键 API：** `forced` / `damageSource` / `logTarget` / `chooseControl` / `choiceList` / `chooseButton([... , "skill"])` / `gainMaxHp` / `draw` / `game.countPlayer()` / `disableSkill(禁用者, 技)` / `enableSkill(禁用者)` / `when({player:"phaseEnd"}, false)` / `isIn` / `line`。
 
 ---
 
@@ -921,7 +940,7 @@ export default function () {
 47. **"令一名角色失去技能直到回合结束"用 `tempBanSkill(skill)`**（夺魂②）：引擎内置（Player.tempBanSkill），默认 expire `{global:["phaseAfter","phaseBeforeStart"]}` = **当前回合结束时解除**（`lib.relatedTrigger` 只映射 `phaseAny`，`phaseAfter` 不匹配任何相关触发名，精确对应回合结束事件）。封锁范围：①触发结算——`lib.filter.filterTrigger` 尾段检查 storage 中 `temp_ban_*`，经 `game.expandSkills([被封技能])` 匹配（**连 group 成员一起封锁**）；②主动使用——enable 技能枚举逐技按 `temp_ban_技能名` 精确匹配（group 成员的 enable 不受影响）。特性：非破坏性（不触发 onremove，storage/标记/扩展牌全保留，技能仍显示在武将牌上）；自动 log "XX的技能【YY】暂时失效了"（`log:false` 可关）；幂等（`isTempBanned` 为真再调用直接返回）。⚠️ **局限**：技能的 `mod`（被动修正：cardname/cardUsable/maxHandcard 等）走 `getModableSkills`→`getSkills()`——`getSkills` 只过滤 `disabledSkills`/`skill_blocker`，**不查 temp_ban**，所以被封技能的被动修正仍生效。若需连 mod 一起封死，改用 `disableSkill(唯一禁用者, 技能)`（会递归禁用 group 成员，且首次禁用时若技能同时有 `ondisable`+`onremove` 会执行其破坏性清理）+ `when({global:["phaseAfter","phaseBeforeStart"]})` 里 `enableSkill(禁用者)` 恢复（参考 `awakenSkill` 的失去语义），代价是自行管理恢复时机与唯一 disabler。
 48. **⚠️ `damageSource` 在死亡结算之后触发**（止涕）：引擎 damage 事件步骤（content.js）：①`changeHp` + `trigger("damage")` → ②`hp<=0` 时 `player.dying()`——求桃与 `_saveAfter` 救场（如夺魂 `recoverTo(1)`）都在此事件内，救回则目标存活 → ③`trigger("damageSource")`。因此**伤害致死时，`damageSource` 时点目标已 `isDead()`，且 die 事件第一步就把其移出了 `game.players`（`isIn()` 也为假）**。触发技 filter 不能用"目标存活/`isDead()`"作条件，否则"杀死目标"时整个技能不触发（止涕加体力上限奖励在击杀时丢失的根因）。需要区分"对尸体豁免"的效果：作用于自己的部分（止涕加上限分支）照常执行；作用于目标本人的部分（封技等）在 content 内用 `target.isIn()` 守卫跳过。
 49. **"直到其下一个回合结束"的时效写法**（止涕）：`addTempSkill(skill, {player:"phaseEnd"})`/`tempBanSkill(skill, {player:"phaseEnd"})` 的语义是"其**下一次** phaseEnd 时解除"——若效果在其自己回合内生效，会在**本回合**结束时提前解除。官方（dcsbzuojun）对"直到其下个回合结束"的标准写法是 when 钩子 + filter 跳过当前回合：`target.when({player:"phaseEnd"}, false).filter(evt => evt != event.getParent("phase")).assign({firstDo:true}).step(cleanup).finish()`。搭配 `tempBanSkill(skill, "forever")`（只置 `temp_ban_` 标记与日志、不挂自动解除）使用。`when(...)` 的 skill 自带 `triggered` 一次性守卫（触发一次后不再执行）；`instantlyAdd=false` 时必须调用 `.finish()` 才会 addSkill。
-50. **dying 事件对已濒死角色幂等**（夺魂②）：damage 事件在 hp≤0 时创建新的 dying 事件，但其第一步（content.ts）检查 `player.isDying() || player.hp > 0` 即 finish——对已处于 `_status.dying` 中的角色（如 `_saveAfter` 中的濒死者）再次造成伤害**不会**嵌套新一轮求桃、也不会提前 die（`isDying()` = `_status.dying.includes(this) && hp <= 0 && isAlive()`，player.js）。随后 `recoverTo(1)` 经 changeHp 检测到 `_status.dying.includes(player) && player.hp > 0`，将其移出 `_status.dying` 并 finish 待决的 `_save`/`dying` 事件，救回照常成立。因此夺魂②的伤害目标可以合法选到濒死角色本身。
+50. **dying 事件对已濒死角色幂等**（通用）：damage 事件在 hp≤0 时创建新的 dying 事件，但其第一步（content.ts）检查 `player.isDying() || player.hp > 0` 即 finish——对已处于 `_status.dying` 中的角色（如 `_saveAfter` 中的濒死者）再次造成伤害**不会**嵌套新一轮求桃、也不会提前 die（`isDying()` = `_status.dying.includes(this) && hp <= 0 && isAlive()`，player.js）。随后 `recoverTo(1)` 经 changeHp 检测到 `_status.dying.includes(player) && player.hp > 0`，将其移出 `_status.dying` 并 finish 待决的 `_save`/`dying` 事件，救回照常成立。因此技能仍可合法地对濒死者本身造成伤害（如幻劫选到濒死者为目标）。
 51. **⚠️ `temp_ban` 封不死的技能类别——"封了但技能照用"**（止涕，2026-09 实测）：`tempBanSkill` 的 `temp_ban_` 标记在引擎里只有两个检查点——filterTrigger（library/index.js 触发排布）与 filterEnable（game/check.js 主动使用枚举）。**mod 被动修正（`getModableSkills`→`getSkills` 只过滤 `disabledSkills`/`skill_blocker`）、skillTag 响应类（`hasSkillTag` 同样走 `getSkills`）、以及依赖 `hasSkill` 判定的 `global:` 子技（如归訫的归訫_put，其 filter 找 `hasSkill("归訫")` 的持有者）都不受 temp_ban 影响**——表现为"弹了封技询问、选了技能、失效日志也打了，但技能照常生效"。强封方案（#47 已提示，止涕已改用）：`target.disableSkill(唯一禁用者, 技能)` 挂 `disabledSkills`，`getSkills`/`hasSkill`/`hasSkillTag`/mod 全部随之失效，`enableSkill(禁用者)` 解除；递归封 group 成员；首次禁用仅当技能同时有 `ondisable`+`onremove` 才执行破坏性清理（本扩展技能均无 `ondisable`）。解除时机仍用 #49 的 when 钩子，step 内改调 `player2.enableSkill("止涕")`。
 52. **⚠️ 全局历史没有 `damage` 键**（魅祸，2026-09 实测）：`game.getGlobalHistory(key)` 直接查 `_status.globalHistory[最新记录][key]`，而全局记录只初始化了 **`cardMove`/`custom`/`useCard`/`changeHp`/`everything` 五个键**（content.js phase 轮换处），`damage` 只存在于玩家个人 `actionHistory`（`player.getHistory("damage")`）——传 `"damage"` 会拿到 undefined，对其 `.length`/`.filter` 直接 TypeError。要按事件名全局检索用 `game.getGlobalHistory("everything", evt => evt.name == "damage")`（zhanfa.js 同款），需要"基线差"统计时对过滤结果 `.length`/`.slice()` 即可。
 53. **⚠️ `chooseTarget`/`chooseCardTarget` 的 filter 签名是 `(card, player, target)`**（魅心，2026-09 实测）：候选判定函数的参数序是 (card, 选择者, 候选目标)（yingbian.js 等官方技能同款）——箭头函数写成 `(card, target) => target !== player` 时，第二个参数捕获到的是**选择者本人**，`选择者 !== 貂蝉` 恒为 false，表现为"选择目标时点不了任何角色"（无报错、纯静默失败）。选"其他角色"直接用 `lib.filter.notMe`（神孙权冯河同款），自定义筛选务必写全三个参数 `(card, player2, target)`。
