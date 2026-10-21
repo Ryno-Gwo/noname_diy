@@ -64,11 +64,14 @@ const skills = {
 			) {
 				return false;
 			}
-			// 选项1可行：上限>1 且武将牌堆有你可获得的技能；选项2可行：持有来源技
+			// 选项1可行：上限>1 且武将牌堆有你可获得的技能；选项2可行：持有来源技；
+			// 选项3可行：有牌可弃且存在可恢复的失效技能
 			return (
 				(player.maxHp > 1 &&
 					lib.skill.夺魂.getPileCandidates(player).length > 0) ||
-				lib.skill.夺魂.getStolenSkills(player).length > 0
+				lib.skill.夺魂.getStolenSkills(player).length > 0 ||
+				(player.countCards("he") > 0 &&
+					lib.skill.夺魂.getRestorableSkills(player).length > 0)
 			);
 		},
 		getSkills(target) {
@@ -228,10 +231,106 @@ const skills = {
 				}
 			}
 		},
+		// 失效池：仍拥有但当前不生效的技能（被 disableSkill 禁用，或被 skillBlocker 封锁）。
+		// 不含已 removeSkill 移除的技能（夺魂/魂契拿到又失去的来源技不在其列，无法恢复），
+		// 也不含已觉醒的技能（awakenSkill 的觉醒封锁不属"被锁"，恢复它等于解除觉醒）
+		getDisabledSkills(player) {
+			const raw = player.getSkills(null, false, false);
+			const effective = player.getSkills(null, false, true);
+			return raw.filter(
+				(skill) =>
+					!effective.includes(skill) &&
+					!player.awakenedSkills.includes(skill),
+			);
+		},
+		// 可恢复判定：disableSkill 型（止涕式）恒可解；
+		// skillBlocker 型（破怠式）须封锁器以 storage 数组记录封锁名单，动态条件封锁不可恢复
+		canRestoreSkill(player, skill) {
+			const sources = player.disabledSkills[skill];
+			if (Array.isArray(sources) && sources.length) {
+				return true;
+			}
+			return (player.storage.skill_blocker || []).some((blocker) => {
+				const info = lib.skill[blocker];
+				return (
+					info &&
+					info.skillBlocker &&
+					info.skillBlocker(skill, player) &&
+					Array.isArray(player.storage[blocker]) &&
+					player.storage[blocker].includes(skill)
+				);
+			});
+		},
+		getRestorableSkills(player) {
+			return lib.skill.夺魂
+				.getDisabledSkills(player)
+				.filter((skill) => lib.skill.夺魂.canRestoreSkill(player, skill));
+		},
+		// 恢复一个失效技能：对两类封锁做精确反操作，连 group 子技一起解封
+		restoreSkill(player, skill) {
+			// ① disableSkill 型（止涕式）：删除该技能及 group 子技树上的全部封锁记录
+			// （不能 enableSkill(禁用者)——那是按禁用者全局解，会连其封锁的其他技能一起放开）
+			const tree = [skill];
+			game.expandSkills(tree);
+			for (const t of tree) {
+				delete player.disabledSkills[t];
+			}
+			// ② skillBlocker 型（破怠式）：从封锁器的 storage 名单移除；名单清空则连封锁器一并移除
+			for (const blocker of (player.storage.skill_blocker || []).slice()) {
+				const info = lib.skill[blocker];
+				const storage = player.storage[blocker];
+				if (
+					info &&
+					info.skillBlocker &&
+					info.skillBlocker(skill, player) &&
+					Array.isArray(storage) &&
+					storage.includes(skill)
+				) {
+					storage.remove(skill);
+					if (!storage.length) {
+						player.removeSkill(blocker); // onremove → removeSkillBlocker，并清理标记
+					} else {
+						player.markSkill(blocker); // 刷新封锁标记的失效列表显示
+					}
+				}
+			}
+			// 失效期间 checkMarks 可能清过技能标记，恢复后补挂
+			if (lib.skill[skill]?.mark) {
+				player.markSkill(skill);
+			}
+			_status.event.clearStepCache();
+		},
+		// 恢复交互：选择并恢复一个失效技能，返回是否恢复（夺魂③/止涕③共用）
+		async restoreDisabledSkill(player) {
+			const list = lib.skill.夺魂.getRestorableSkills(player);
+			if (!list.length) {
+				return false;
+			}
+			const result = await player
+				.chooseButton(["选择恢复一个失效技能", [list, "skill"]], true)
+				.set("ai", (button) => {
+					const info = get.info(button.link);
+					if (["魂契", "夺魂", "迅袭", "止涕"].includes(button.link)) {
+						return 4;
+					}
+					if (info && info.ai && info.ai.combo) {
+						return 3 + Math.random();
+					}
+					return 2 + Math.random();
+				})
+				.forResult();
+			if (!result?.bool || !result.links?.length) {
+				return false;
+			}
+			const skill = result.links[0];
+			lib.skill.夺魂.restoreSkill(player, skill);
+			game.log(player, "的技能", "#g【" + get.translation(skill) + "】", "恢复了");
+			return true;
+		},
 		async content(event, trigger, player) {
 			const target = trigger.dying;
 			const stolenSkills = lib.skill.夺魂.getStolenSkills(player);
-			// 二选一（可取消）；任一选项执行后濒死角色回复体力值至1点
+			// 多选一（可取消）；任一选项执行后濒死角色回复体力值至1点
 			const controls = [];
 			if (
 				player.maxHp > 1 &&
@@ -241,6 +340,12 @@ const skills = {
 			}
 			if (stolenSkills.length) {
 				controls.push("失去技能并摸两张牌");
+			}
+			if (
+				player.countCards("he") > 0 &&
+				lib.skill.夺魂.getRestorableSkills(player).length > 0
+			) {
+				controls.push("弃牌恢复技能");
 			}
 			if (!controls.length) {
 				return;
@@ -253,8 +358,9 @@ const skills = {
 				.set("prompt", get.prompt("夺魂", target))
 				.set(
 					"prompt2",
-					`濒死角色：${get.translation(target)}。选择一项：①若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的${pileNum}张牌并获得其中一个技能；②失去一个来源于其他角色或武将牌堆的技能并摸两张牌。选择一项后令其回复体力值至1点。`,
+					`濒死角色：${get.translation(target)}。选择一项：①若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的${pileNum}张牌并获得其中一个技能；②失去一个来源于其他角色或武将牌堆的技能并摸两张牌；③弃一张牌并恢复一个失效技能。选择一项后令其回复体力值至1点。`,
 				)
+				.set("restoreSkills", lib.skill.夺魂.getRestorableSkills(player))
 				.set("ai", () => {
 					const player2 = _status.event.player;
 					const trigger2 = _status.event.getTrigger();
@@ -263,17 +369,30 @@ const skills = {
 						return "cancel2";
 					}
 					const evtControls = _status.event.controls || [];
+					const restoreSkills = _status.event.restoreSkills || [];
+					// 有核心技/连协技可恢复时，③弃牌解封优先于摸牌
+					const hasGoodRestore = restoreSkills.some(
+						(s) =>
+							["魂契", "夺魂", "迅袭", "止涕"].includes(s) ||
+							get.info(s)?.ai?.combo,
+					);
 					if (
 						evtControls.includes("减体力上限并获得技能") &&
 						player2.maxHp > 2
 					) {
 						return "减体力上限并获得技能";
 					}
+					if (hasGoodRestore && evtControls.includes("弃牌恢复技能")) {
+						return "弃牌恢复技能";
+					}
 					if (evtControls.includes("失去技能并摸两张牌")) {
 						return "失去技能并摸两张牌";
 					}
 					if (evtControls.includes("减体力上限并获得技能")) {
 						return "减体力上限并获得技能";
+					}
+					if (evtControls.includes("弃牌恢复技能")) {
+						return "弃牌恢复技能";
 					}
 					return "cancel2";
 				})
@@ -285,6 +404,15 @@ const skills = {
 				// 选项1：减少1点体力上限，观看武将牌堆的X张牌并获得其中一个技能
 				await player.loseMaxHp();
 				await lib.skill.夺魂.gainFromPile(player, pileNum);
+			} else if (costResult.control === "弃牌恢复技能") {
+				// 选项3：弃一张牌并恢复一个失效技能
+				await player.chooseToDiscard(
+					"he",
+					true,
+					1,
+					"夺魂：弃一张牌，恢复你的一个失效技能",
+				);
+				await lib.skill.夺魂.restoreDisabledSkill(player);
 			} else {
 				// 选项2：失去一个来源于其他角色或武将牌堆的技能并摸两张牌
 				const chosen = await player
@@ -407,7 +535,7 @@ const skills = {
 			const target = event.player;
 			// 不判目标存活：damageSource 在死亡结算之后触发（damage 事件步骤：
 			// changeHp → dying/death → damageSource），两个分支都应对击杀成立。
-			// 2026-10 三次改版：造成伤害即触发，无条件二选一（上限/摸牌 / 封技）
+			// 2026-10 三次改版：造成伤害即触发；七次改版扩为多选一（上限/摸牌 / 封技 / 恢复失效技能）
 			if (!target || target === player || !(event.num > 0)) {
 				return false;
 			}
@@ -440,38 +568,73 @@ const skills = {
 			};
 			const maxHpCapped = player.maxHp >= game.countPlayer();
 			const option1Label = maxHpCapped ? "摸一张牌" : "增加体力上限";
-			// 二选一；选项2不可行（目标已死/无可封技）时仅剩选项1，直接执行不询问
+			// 选项3候选：自己当前可恢复的失效技能（被破怠等封锁/禁用时的反制）
+			const restoreSkills = lib.skill.夺魂.getRestorableSkills(player);
+			// 多选一；选项2/3均不可行（目标已死/无可封技且无可恢复技）时仅剩选项1，直接执行不询问
+			if (banSkills.length === 0 && restoreSkills.length === 0) {
+				await applyOption1();
+				return;
+			}
+			const controls = [option1Label];
+			const choiceList = [
+				maxHpCapped
+					? "摸一张牌（你的体力上限已不小于场上角色数）"
+					: "增加一体力上限",
+			];
 			if (banSkills.length > 0) {
-				const result = await player
-					.chooseControl([option1Label, "令其失去技能"])
-					.set("prompt", get.prompt(event.name, target))
-					.set("choiceList", [
-						maxHpCapped
-							? "摸一张牌（你的体力上限已不小于场上角色数）"
-							: "增加一体力上限",
-						`令${get.translation(target)}失去一个技能，直到其下一个回合结束`,
-					])
-					.set("ai", () => {
-						const me = _status.event.player;
-						const tgt = _status.event.getTrigger().player;
-						// 友方不封技；敌方持有combo技时封技压制优先，否则走选项1（上限成长或摸牌）
-						if (get.attitude(me, tgt) < 0) {
-							const combo = banSkills.some(
-								(s) =>
-									get.info(s) &&
-									get.info(s).ai &&
-									get.info(s).ai.combo,
-							);
-							return combo ? "令其失去技能" : option1Label;
+				controls.push("令其失去技能");
+				choiceList.push(
+					`令${get.translation(target)}失去一个技能，直到其下一个回合结束`,
+				);
+			}
+			if (restoreSkills.length > 0) {
+				controls.push("恢复失效技能");
+				choiceList.push("恢复你的一个失效技能");
+			}
+			const result = await player
+				.chooseControl(controls)
+				.set("prompt", get.prompt(event.name, target))
+				.set("choiceList", choiceList)
+				.set("banSkills", banSkills)
+				.set("restoreSkills", restoreSkills)
+				.set("option1Label", option1Label)
+				.set("ai", () => {
+					const me = _status.event.player;
+					const tgt = _status.event.getTrigger().player;
+					const bans = _status.event.banSkills;
+					const restores = _status.event.restoreSkills;
+					const opt1 = _status.event.option1Label;
+					// 优先恢复自己的核心技（被锁魂契/夺魂等时以此反制）；友方不封技；
+					// 敌方持有combo技时封技压制；恢复连协技次优先，否则走选项1（上限成长或摸牌）
+					if (
+						restores.some((s) =>
+							["魂契", "夺魂", "迅袭", "止涕"].includes(s),
+						)
+					) {
+						return "恢复失效技能";
+					}
+					if (get.attitude(me, tgt) < 0) {
+						const combo = bans.some(
+							(s) =>
+								get.info(s) &&
+								get.info(s).ai &&
+								get.info(s).ai.combo,
+						);
+						if (combo) {
+							return "令其失去技能";
 						}
-						return option1Label;
-					})
-					.forResult();
-				if (result?.control !== "令其失去技能") {
-					await applyOption1();
-					return;
-				}
-			} else {
+					}
+					if (restores.some((s) => get.info(s)?.ai?.combo)) {
+						return "恢复失效技能";
+					}
+					return opt1;
+				})
+				.forResult();
+			if (result?.control === "恢复失效技能") {
+				await lib.skill.夺魂.restoreDisabledSkill(player);
+				return;
+			}
+			if (result?.control !== "令其失去技能") {
 				await applyOption1();
 				return;
 			}
@@ -518,7 +681,7 @@ const skills = {
 		ai: {
 			effect: {
 				target(card, player, target, current) {
-					// 止涕强制触发：对其他角色造成伤害必有收益（上限/摸牌或封技），伤害牌价值提升
+					// 止涕强制触发：对其他角色造成伤害必有收益（上限/摸牌/封技/恢复），伤害牌价值提升
 					if (target !== player && get.tag(card, "damage") > 0) {
 						return current + 0.3;
 					}

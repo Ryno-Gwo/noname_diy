@@ -85,7 +85,7 @@ export default function () {
 
 | 角色 | 技能（含附属） | 定位 / 主题 |
 |------|----------------|------------|
-| 神张辽（shen，1/5） | 魂契、夺魂、迅袭、止涕 | 体力上限↔技能/手牌的资源流转（回合开始偷技 + 死亡时观武将牌堆取技/丢技摸2）+ 迅袭减上限补刀 + 打伤害换上限/封技 |
+| 神张辽（shen，1/5） | 魂契、夺魂、迅袭、止涕 | 体力上限↔技能/手牌的资源流转（回合开始偷技 + 死亡时观武将牌堆取技/丢技摸2/弃牌解封）+ 迅袭减上限补刀 + 打伤害换上限/封技/恢复失效技 |
 | 神曹操（shen，3/3） | 归訫（归訫2/归訫_put/归訫_use）、飛影 | 卖血 + 标记牌（扩展区）+ 虚拟用牌 |
 | 神诸葛（shen，3/3） | 七煋（七煋_mark）、相天（相天2）、神机（神机_used） | 观牌堆定序 + 花色联动 |
 | 神徐盛（shen，5/5） | 疑兵（觉醒技）、疑城（疑城_skip / 疑城_negate）、破军 | 觉醒成长 + "疑兵"资源（跳过摸牌+弃牌囤积 / 无效化换牌）+ 破军无距离次数/不可响应/目标扩张 |
@@ -269,20 +269,22 @@ export default function () {
 ### 2.1.1 夺魂
 
 **文案：**
-> 一名角色死亡时，你可以选择一项并令其回复体力值至1点：1、若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的X张牌并获得其中一个技能（X为场上角色数且至少为3）；2、失去一个来源于其他角色或武将牌堆的技能并摸两张牌。
+> 一名角色死亡时，你可以选择一项并令其回复体力值至1点：1、若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的X张牌并获得其中一个技能（X为场上角色数且至少为3）；2、失去一个来源于其他角色或武将牌堆的技能并摸两张牌；3、弃一张牌并恢复一个失效技能。
 
 **设计点：**
 1. 原情况A（gameStart 减上限偷技）并入魂契③并改为强制发动（不再付上限代价）；本技能只剩"死亡时救场"一个触发。
 2. **救场（_saveAfter）**：求桃失败后兜底，"选择一项并令其回复体力值至1点"——**减上限观武将牌堆取技**（X = 场上角色数且至少为3；2026-10 四次改版：参考神左慈【幻魂】选项3，从"偷一名其他角色的技能"改为"观武将牌堆取技"，来源记哨兵字符串）或**丢一个来源技（角色来源或武将牌堆来源均可）并摸两张牌**（2026-10 五次改版：选项2从"对一名其他角色造成一点伤害"改为"摸两张牌"，纯收益）。
 3. 选项2摸牌为纯收益，不再经伤害联动止涕；救友军成本更低，救自己（自杀式濒死）同样成立。
-4. 选项1可行性 = 上限>1 且武将牌堆有你可获得的技能；选项2可行性 = 持有至少1个来源技（角色来源或武将牌堆来源）。两者皆不可行时天然安全锁。
+4. 选项1可行性 = 上限>1 且武将牌堆有你可获得的技能；选项2可行性 = 持有至少1个来源技（角色来源或武将牌堆来源）；选项3可行性 = 有牌可弃且存在可恢复的失效技能。皆不可行时天然安全锁。
+5. **选项3（2026-10 七次改版）**：弃一张牌并恢复一个失效技能——反制破怠（hm_podai）这类"封锁/禁用仍持有的技能"的效果。**"失效"口径**：技能仍在武将牌上但不生效（被 `disableSkill` 禁用，或被 `skillBlocker` 封锁器锁住，见踩坑#62）；夺魂/魂契拿到又失去的技能是 `removeSkill` 移除、不在失效池，**不可恢复**；觉醒技的觉醒封锁（`awakenedSkills`）同样排除。
 
 **实现要点：**
-- **触发**：`trigger:{global:"_saveAfter"}`，`forced:true` + `locked:true`。filter 判 `event.dying.isIn() && event.dying.isDying()`，不排除自己（可自救）；选项1可行性并入 filter（`maxHp>1 && getPileCandidates().length>0`），避免空弹泡。
+- **触发**：`trigger:{global:"_saveAfter"}`，`forced:true` + `locked:true`。filter 判 `event.dying.isIn() && event.dying.isDying()`，不排除自己（可自救）；选项1/3可行性并入 filter（选项1：`maxHp>1 && getPileCandidates().length>0`；选项3：`countCards("he")>0 && getRestorableSkills().length>0`），避免空弹泡。
 - **⚠️ 不能用 `group`**：若用 `group:["夺魂_rescue"]` 分离救人逻辑，引擎会用子技能的 trigger 覆盖主技能的 trigger（见踩坑记录#28）。
-- **流程**：`chooseControl(["减体力上限并获得技能", "失去技能并摸两张牌", "cancel2"])` → 对应效果 → `recoverTo(1)`。
+- **流程**：`chooseControl`（可行选项动态拼入 + `cancel2`）→ 对应效果 → `recoverTo(1)`。
   - 选项1：`loseMaxHp` → `await lib.skill.夺魂.gainFromPile(player, pileNum)`，`pileNum = Math.max(3, game.countPlayer())`（X = 场上角色数且至少为3；`randomGets` 自动截断越界）。
   - 选项2：`chooseButton` 选要失去的来源技 → `removeSkill` + `delete 夺魂_sources` → `draw(2)`。
+  - 选项3：`chooseToDiscard("he", true, 1, ...)`（弃一张牌，同幻魂②写法）→ `await lib.skill.夺魂.restoreDisabledSkill(player)`（强制单选要恢复的技能）。
 - **复活**：`await target.recoverTo(1)`（在 `_saveAfter` 内拉回 1 血即可阻止后续 die；两选项共用——"选择一项后"任一选项执行即成立）。
 - **偷技辅助 `stealSkill(player)`**（魂契③专用）：强制 `chooseTarget`（其他角色 ∩ 有你未持有的技能）→ 强制 `chooseButton` 选技能（AI 避开 charlotte 鸡肋技）→ `addSkills` → 逐技写入 `player.storage.夺魂_sources[技能] = 来源角色`。
 - **观堆取技辅助 `gainFromPile(player)`**（选项1专用，同幻魂选项3但不入幻魂池）：候选 = 剩余武将牌堆中拥有"你可获得技能"的武将（`_status.characterlist`，未初始化则 `game.initCharacterList()`，场上角色已被剔出牌堆）；来源记哨兵字符串，不与任何玩家对象相等，`getStolenSkills` 的 `map[skill]!==player` 判定照常纳入。
@@ -293,9 +295,14 @@ export default function () {
   - `stealSkill(player)`：偷技交互（选目标 → 选技能 → 记录来源）
   - `getPileCandidates(player)`：剩余武将牌堆中拥有"你可获得技能"的武将列表（同幻魂.getPileCandidates）
   - `gainFromPile(player, num = 5)`：观堆取技交互（观X张 → 选武将 → 选技能 → 记录哨兵来源）
-- **AI**：对濒死角色好感度 ≤0 则取消（救自己除外）；上限>2 优先扣上限，否则丢来源技能（优先丢 `info.charlotte` 的鸡肋技）+ 摸2。
+  - `getDisabledSkills(player)`：失效池＝`getSkills(null,false,false)`（原始，第三参关过滤）与 `getSkills(null,false,true)`（过滤后）的差集——`game.filterSkills` 只剔 `disabledSkills` 与封锁，差集恰为"失效但仍拥有"；已 `removeSkill` 移除的不在池内；排除 `awakenedSkills`（觉醒封锁不可恢复）
+  - `canRestoreSkill(player, skill)`：`disabledSkills` 型恒可解；skillBlocker 型仅当封锁器以 storage 数组记封锁名单（破怠式）可解，动态条件封锁不可
+  - `getRestorableSkills(player)`：失效池 ∩ 可恢复
+  - `restoreSkill(player, skill)`：精确反操作——`game.expandSkills([技能])` 展开子技树逐条目 `delete disabledSkills[t]`（不能 `enableSkill(禁用者)`，那是按禁用者全局解）＋ 从各封锁器 storage 名单 `remove`（清空则 `removeSkill(封锁器)`）＋ 有 mark 则 `markSkill` 补挂 ＋ `clearStepCache`
+  - `restoreDisabledSkill(player)`：选技交互（强制单选，AI 优先核心技/连协技）→ `restoreSkill`，返回是否恢复（夺魂③/止涕③共用）
+- **AI**：对濒死角色好感度 ≤0 则取消（救自己除外）；上限>2 优先扣上限，其次（有核心技/连协技可恢复时）选③弃牌解封，否则丢来源技能（优先丢 `info.charlotte` 的鸡肋技）+ 摸2。
 
-**关键 API：** `forced` / `locked` / `_saveAfter` / `chooseControl` / `chooseButton([... , "skill"])` / `chooseButton([list, "character"])` / `loseMaxHp` / `draw` / `game.countPlayer()` / `recoverTo` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `get.prompt` / `get.attitude` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `_status.event.getTrigger()`。
+**关键 API：** `forced` / `locked` / `_saveAfter` / `chooseControl` / `chooseButton([... , "skill"])` / `chooseButton([list, "character"])` / `loseMaxHp` / `draw` / `chooseToDiscard` / `game.countPlayer()` / `recoverTo` / `addSkills` / `removeSkill` / `hasSkill` / `storage` / `get.prompt` / `get.attitude` / `_status.characterlist` / `game.initCharacterList()` / `randomGets` / `_status.event.getTrigger()` / `getSkills(null,false,false|true)` / `disabledSkills` / `storage.skill_blocker` / `get.is.blocked` / `game.expandSkills` / `awakenedSkills` / `clearStepCache`。
 
 ---
 
@@ -322,24 +329,26 @@ export default function () {
 ### 2.1.3 止涕
 
 **文案：**
-> 当对其他角色造成伤害时，你选择一项：1、若你的体力上限小于场上的角色数，你增加一体力上限，否则你摸一张牌；2、令其失去一个技能直到其下一个回合结束。
+> 锁定技。当对其他角色造成伤害时，你选择一项：1、若你的体力上限小于场上的角色数，你增加一体力上限，否则你摸一张牌；2、令其失去一个技能直到其下一个回合结束；3、恢复一个失效技能。
 
 **设计点：**
-1. 无条件二选一（2026-10 三次改版，原"有来源技→封技/无来源技→加上限"的双分支互斥移除）：造成伤害即触发，**选项1（上限/摸牌）**或**封技**任选其一。
+1. 无条件多选一（2026-10 三次改版改二选一并移除原"有来源技→封技/无来源技→加上限"的双分支互斥，2026-10 七次改版扩为三选一）：造成伤害即触发，**选项1（上限/摸牌）**、**封技**、**恢复失效技能**任选其一。
 2. 上限成长固定为1点/次但有封顶（2026-10 六次改版：上限 < 场上角色数才涨，否则改摸1牌）：未封顶时止涕是上限成长的核心引擎——上限即手牌上限（魂契②）、即夺魂观堆的发动资源（夺魂①）；封顶后自动转化为过牌收益，避免无限堆上限。
 3. 封技不再有来源限制：任意伤害都可封锁目标任意技能（非 charlotte）直到其下一个回合结束，从"惩罚被偷过技能的目标"变为通用压制。
-4. 强制触发（`forced:true`）：造成伤害即进入 content，"你选择一项"无取消项；选项2不可行（目标已死/无可封技）时仅剩选项1，直接执行不询问（幻魂式单选项直执行）。
+4. 强制触发（`forced:true`）：造成伤害即进入 content，"你选择一项"无取消项；选项2/3均不可行（目标已死/无可封技且无可恢复技）时仅剩选项1，直接执行不询问（幻魂式单选项直执行）。
+5. **选项3（2026-10 七次改版）**：恢复**自己的**一个失效技能（止涕②封目标，③解自己的封），与夺魂③同口径——仍拥有但被禁/被封的技能，移除的技能不在池内（见踩坑#62）。与夺魂③互为保底：止涕被锁时自身无法触发，靠夺魂③救；夺魂被锁时靠止涕③救。
 
 **实现要点：**
 - **触发**：`source:"damageSource"` + `forced:true`，`filter` 判目标≠自己且 `event.num > 0`。⚠️ **不判目标存活**——`damageSource` 在死亡结算之后触发（damage 事件步骤：changeHp → dying/death → damageSource），两个分支都应对击杀成立（见踩坑#48）。
 - **可行性判定**：content 开头算失效池——`target.isIn()`（尸体豁免——死亡角色不再是效果对象，此时仅剩选项1）+ 失效池非空；失效池：`lib.skill.夺魂.getSkills(target)` ∩ `target.hasSkill` ∩ 非 `charlotte`（`hasSkill` 经 `getSkills` 过滤 `disabledSkills`，已被封住的技能自然排除，无需另查失效标记）。
-- **询问**：双选项可行时 `chooseControl([option1Label, "令其失去技能"])` + `choiceList`（无 cancel，"你选择一项"）；首选项标签动态——`maxHp < game.countPlayer()` 时为"增加体力上限"，封顶时为"摸一张牌"；AI 友方走选项1、敌方持有 `info.ai.combo` 技能时封技否则走选项1。
+- **询问**：可行选项动态拼 `controls`/`choiceList`（选项1恒可行；封技需失效池非空；恢复需 `getRestorableSkills(player)` 非空），仅剩选项1时直接执行不询问；首选项标签动态——`maxHp < game.countPlayer()` 时为"增加体力上限"，封顶时为"摸一张牌"；AI 优先恢复核心技（魂契/夺魂/迅袭/止涕被锁时反制）、敌方持有 `info.ai.combo` 技能时封技、有连协技可恢复次优先，否则走选项1。
 - **选项1**：`player.maxHp < game.countPlayer()` → `await player.gainMaxHp()`，否则 → `await player.draw(1)`（加在自己身上，对尸体同样生效；封顶判定在执行时实时计算）。
 - **"直到其下一个回合结束"（2026-09 三次改版：tempBanSkill → disableSkill）**：`target.disableSkill("止涕", skill)` 把技能挂进 `disabledSkills`，经 `getSkills` 过滤后**触发、主动使用、mod 被动、skillTag、依赖 hasSkill 的 global 子技一并失效**——旧 `tempBanSkill` 的 `temp_ban_` 只覆盖 filterTrigger/filterEnable 两个显式检查点，mod/skillTag/global 子技（如归訫的归訫_put）会"封了照用"（实测踩坑，见#51）。解除用官方 dcsbzuojun 式 when 钩子：`target.when({player:"phaseEnd"}, false).filter(evt => evt != event.getParent("phase")).assign({firstDo:true}).step(player2.enableSkill("止涕")).finish()`——在其自己的回合结束触发，filter 跳过封技发生时所在的当前回合（若在其回合内造成伤害则顺延到其下下回合，严格等于"其下一个回合结束"，见踩坑#49）；自定义 filter 在排布阶段判定，被跳过不消耗 `when` 的一次性守卫（content.ts 仅在触发事件真正创建后才置 `triggered`）。⚠️ `disableSkill` 首次禁用若技能同时有 `ondisable`+`onremove` 会执行破坏性清理——本扩展与常规官方技均无 `ondisable`，安全。
-- **AI**：`ai.effect.target` 对任意目标提高伤害牌价值（`current + 0.3`——上限/摸牌或封技必有收益）。
+- **选项3**：`await lib.skill.夺魂.restoreDisabledSkill(player)`——选技交互与恢复逻辑复用夺魂的辅助函数（见 2.1.1），恢复对象是止涕持有者自己。
+- **AI**：`ai.effect.target` 对任意目标提高伤害牌价值（`current + 0.3`——上限/摸牌/封技/恢复必有收益）。
 - 旧三标记（止戈/血俎/失魂）与 `止涕_mark` 展示技能已随前版移除；`countFromSource` 辅助已随本版移除（止涕不再读取技能来源）。
 
-**关键 API：** `forced` / `damageSource` / `logTarget` / `chooseControl` / `choiceList` / `chooseButton([... , "skill"])` / `gainMaxHp` / `draw` / `game.countPlayer()` / `disableSkill(禁用者, 技)` / `enableSkill(禁用者)` / `when({player:"phaseEnd"}, false)` / `isIn` / `line`。
+**关键 API：** `forced` / `damageSource` / `logTarget` / `chooseControl` / `choiceList` / `chooseButton([... , "skill"])` / `gainMaxHp` / `draw` / `game.countPlayer()` / `disableSkill(禁用者, 技)` / `enableSkill(禁用者)` / `when({player:"phaseEnd"}, false)` / `isIn` / `line` / `lib.skill.夺魂.restoreDisabledSkill`。
 
 ---
 
@@ -957,3 +966,4 @@ export default function () {
 59. **触发类附属技能必须写 `forced`**（恣胜_effect，2026-09-30 实测）：引擎对所有非 `forced`/`direct` 的触发技，在每次生效前默认弹 chooseBool 询问（"是否发动【XXX】？"），`sub`/`charlotte` 附属技也不例外——表现为恣胜4倍增益指定目标后多出一次"是否发动恣胜-附属技能"的可取消询问，取消即效果丢失。修复：效果型附属触发技一律 `forced: true`（锁定生效），反馈靠引擎自动弹泡（sourceSkill 技能名）+ 自行 `game.log` 具体效果。
 60. **"无点数牌视为X点"不能走 `mod.cardnumber`，需对 `get.number` 打外层补丁**（恣胜②，2026-09-30 初版，2026-10-02 实测修正）：`get.number` 尾部（get/index.js）确有 `game.checkMod(card, owner, number, "cardnumber", owner)` 钩子，**但 checkMod 的覆盖守卫 `typeof arg[last] != "object"` 对 null 基数恒为 true——`typeof null === "object"` 是经典 JS 陷阱**。无点数牌（无 `card.number` 且 `.cards` 非1张，如丈八两牌合一杀、纯 `autoViewAs` 虚拟牌——显略的视为【杀】即此类）基数恰为 null：mod 会照常被调用、**返回值却必被丢弃**，等于永远不生效（实测：显略的虚拟杀不触发恣胜，"视为3"形同虚设）。数字基数（typeof "number"）时守卫不拦截，但那本就无需 mod——**该 mod 对无点数场景完全无效**。可用实现：在扩展入口（extension.js）对 `get.number` 打外层补丁——包装原函数，原函数返回 `null` 且 `card` 为对象时，取 `player === false ? false : player || get.owner(card)`，拥有恣胜则返回 3；filter/content 及任意查询方的 `get.number(card, player)` 自动跟随。⚠️ 补丁函数加 `_nonameDiyPatched` 标记防重复包装（模块重复载入时防套娃）；⚠️ 补丁/`mod` 内均禁止调用 `get.number`（无限递归，踩坑#45 同理）；`"unsure"` 在钩子**之前**提前 return、不经补丁——技能层用 `typeof` 兜底；`player === false` 表示调用方明确不按归属查询，补丁尊重之直接放行。
 61. **附属技能出现在"角色技能列表"的机制与隐藏方法**（恣胜_effect/豪贤_aura，2026-10-01 实测）：悬停/点击角色弹出的技能列表面板由 `get.nodeintro`（get/index.js）构建，它遍历 `player.getSkills()`（含 tempSkills/additionalSkills），**凡 `lib.translate[技能+"_info"]` 有翻译条目的技能都会列出**（标题取 `get.translation` 前2字、描述取 `_info`），与技能是否"临时"无关；`显略_used` 不出现仅因其没有 `_info` 翻译条目。隐藏方法二选一：① 不写该技能的 `_info` 翻译条目；② 技能加 **`nopop: true`**——nodeintro 对 `nopop`/`equipSkill` 技能直接 `continue` 跳过（官方 sub 技能同款开关）。`nopop` 的全部副作用：菜单"武将百科/衍生技"列表同样跳过（本扩展未用衍生技展示，无影响）；**不影响**标记（mark/marktext/intro 照常显示）、不影响触发与 AI。另可给触发类附属技配 `popup: false` 关闭引擎自动 logSkill，避免附属技与主技能重复弹泡/记录"发动了【主技能】"。
+62. **"恢复失效技能"的可行域与解除写法**（夺魂③/止涕③，2026-10 实测）：引擎层面"技能仍拥有但不生效"只有两类——`disableSkill(禁用者, 技能)` 挂 `disabledSkills`（被禁技 → [禁用者] 数组），与 `skillBlocker` 封锁器（`player.storage.skill_blocker` 存封锁器名，`get.is.blocked` 逐一调 `skillBlocker(被查技, player)` 判定）；两者都经 `game.filterSkills` 从 `getSkills`/`hasSkill` 中剔除。**失效池枚举**＝`getSkills(null,false,false)`（原始，第三参 `applySkillFilter` 传 false）与 `getSkills(null,false,true)`（过滤后）的差集，恰好就是"失效但仍拥有"的技能；已 `removeSkill` 移除的不在池内（故夺魂/魂契拿到又失去的来源技天然不可恢复）。**解除**＝精确反操作：① disableSkill 型——`game.expandSkills([技能])` 展开子技树后逐条目 `delete player.disabledSkills[t]`，**不能**用 `enableSkill(禁用者)`——那是按禁用者全局解，会连其封锁的其他技能一起放开；② skillBlocker 型——仅当封锁器以 **storage 数组记录封锁名单**（破怠 `hm_podai_sb` 式）时可解：`storage.remove(技能)`，名单清空则 `removeSkill(封锁器)`（onremove 自动 `removeSkillBlocker`）；动态条件封锁（skillBlocker 不依赖名单）无解，须经 `canRestoreSkill` 从可恢复列表排除。⚠️ 觉醒技觉醒后 `disabledSkills[技]=["技_awake"]` 会混入差集，须排除 `player.awakenedSkills`（恢复它等于解除觉醒）。解锁后技能有 mark 的需 `markSkill` 补挂（checkMarks 可能在失效期间清过），并 `_status.event.clearStepCache()`。
