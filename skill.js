@@ -64,12 +64,12 @@ const skills = {
 			) {
 				return false;
 			}
-			// 选项1可行：上限>1 且武将牌堆有你可获得的技能；选项2可行：持有来源技；
+			// 选项1可行：上限>1 且武将牌堆有你可获得的技能；选项2可行：有可失去的技能；
 			// 选项3可行：有牌可弃且存在可恢复的失效技能
 			return (
 				(player.maxHp > 1 &&
 					lib.skill.夺魂.getPileCandidates(player).length > 0) ||
-				lib.skill.夺魂.getStolenSkills(player).length > 0 ||
+				lib.skill.夺魂.getRemovableSkills(player).length > 0 ||
 				(player.countCards("he") > 0 &&
 					lib.skill.夺魂.getRestorableSkills(player).length > 0)
 			);
@@ -87,10 +87,20 @@ const skills = {
 			}
 			return list;
 		},
-		getStolenSkills(player) {
-			const map = player.storage.夺魂_sources || {};
-			return Object.keys(map).filter(
-				(skill) => map[skill] !== player && player.hasSkill(skill),
+		// 可失去池（选项2）：获得的技能——当前武将牌固有技与已觉醒的觉醒技不可失去。
+		// 覆盖：魂契/夺魂偷来的技、他人直接塞入的强加技（addSkills 型）、被封锁/禁用的技（含被锁的自偷技）。
+		// getSkills("invisible",false,false)＝隐藏/隐形/临时技全收、不含装备技、第三参关过滤（被锁的也在列）。
+		// 另排除：charlotte（官方口径：不可被技能指定失去）、fixed（removeSkill 强制保护）、"_"开头的引擎内部技。
+		// ⚠️ 笼墓式 reinitCharacter 换将塞入的技能会变成"当前武将牌固有技"，同属排除范围
+		getRemovableSkills(player) {
+			const ownSkills = lib.skill.夺魂.getSkills(player);
+			return player.getSkills("invisible", false, false).filter(
+				(skill) =>
+					!ownSkills.includes(skill) &&
+					!player.awakenedSkills.includes(skill) &&
+					!skill.startsWith("_") &&
+					!lib.skill[skill]?.charlotte &&
+					!lib.skill[skill]?.fixed,
 			);
 		},
 		// 剩余武将牌堆中拥有"你可获得技能"的武将（同幻魂.getPileCandidates；未初始化时先建堆）
@@ -107,7 +117,7 @@ const skills = {
 		},
 		// 选项1交互：观看武将牌堆中的X张牌（num），选择其中一名武将并获得其一个技能；
 		// 仅观看，武将牌不离开牌堆（同幻魂选项3）；来源记为哨兵字符串"武将牌堆"
-		// （不与任何玩家对象相等，getStolenSkills 照常纳入）
+		// （不与任何玩家对象相等，仅作来源记录）
 		async gainFromPile(player, num = 5) {
 			const candidates = lib.skill.夺魂.getPileCandidates(player);
 			if (!candidates.length) {
@@ -329,7 +339,7 @@ const skills = {
 		},
 		async content(event, trigger, player) {
 			const target = trigger.dying;
-			const stolenSkills = lib.skill.夺魂.getStolenSkills(player);
+			const removableSkills = lib.skill.夺魂.getRemovableSkills(player);
 			// 多选一（可取消）；任一选项执行后濒死角色回复体力值至1点
 			const controls = [];
 			if (
@@ -338,7 +348,7 @@ const skills = {
 			) {
 				controls.push("减体力上限并获得技能");
 			}
-			if (stolenSkills.length) {
+			if (removableSkills.length) {
 				controls.push("失去技能并摸两张牌");
 			}
 			if (
@@ -358,7 +368,7 @@ const skills = {
 				.set("prompt", get.prompt("夺魂", target))
 				.set(
 					"prompt2",
-					`濒死角色：${get.translation(target)}。选择一项：①若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的${pileNum}张牌并获得其中一个技能；②失去一个来源于其他角色或武将牌堆的技能并摸两张牌；③弃一张牌并恢复一个失效技能。选择一项后令其回复体力值至1点。`,
+					`濒死角色：${get.translation(target)}。选择一项：①若你的体力上限大于1，你减少1点体力上限，观看武将牌堆的${pileNum}张牌并获得其中一个技能；②失去一个你获得的技能并摸两张牌；③弃一张牌并恢复一个失效技能。选择一项后令其回复体力值至1点。`,
 				)
 				.set("restoreSkills", lib.skill.夺魂.getRestorableSkills(player))
 				.set("ai", () => {
@@ -414,16 +424,17 @@ const skills = {
 				);
 				await lib.skill.夺魂.restoreDisabledSkill(player);
 			} else {
-				// 选项2：失去一个来源于其他角色或武将牌堆的技能并摸两张牌
+				// 选项2：失去一个获得的技能并摸两张牌（固有技与已觉醒技不在池内）
 				const chosen = await player
-					.chooseButton([
-						"请选择要失去的来源于其他角色或武将牌堆的技能",
-						[stolenSkills, "skill"],
-					])
+					.chooseButton(["请选择要失去的一个获得的技能", [removableSkills, "skill"]])
 					.set("ai", (button) => {
-						const info = get.info(button.link);
-						if (info && info.charlotte) {
-							return 1;
+						// 本家核心技（含极端情形下偷来的同名技）绝不丢
+						if (["魂契", "夺魂", "迅袭", "止涕"].includes(button.link)) {
+							return 0.1;
+						}
+						// 连协技保留，优先丢普通获得的技
+						if (get.info(button.link)?.ai?.combo) {
+							return 1 + Math.random();
 						}
 						return 2 + Math.random();
 					})
